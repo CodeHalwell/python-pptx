@@ -182,9 +182,9 @@ def _resolve_layout(prs: Any, layout_name: str) -> Any:
         if sl.name.lower() == layout_name.lower():
             return sl
 
-    # Last resort: blank
+    # Last resort: first available layout (index 0 is always safe)
     blank = prs.slide_layouts.get_by_name("Blank")
-    return blank if blank is not None else prs.slide_layouts[6]
+    return blank if blank is not None else prs.slide_layouts[0]
 
 
 def _add_slide(prs: Any, slide_spec: dict[str, Any]) -> Any:
@@ -265,10 +265,11 @@ def _set_transition(slide: Any, transition: str | None) -> None:
 
 def _add_kpi_shapes(slide: Any, kpis: list[dict[str, Any]]) -> None:
     """Add KPI card shapes to *slide* — label, value, and optional delta."""
+    from pptx.enum.text import PP_ALIGN
     from pptx.util import Inches, Pt
     from pptx.dml.color import RGBColor
 
-    prs_part = slide.part._package.presentation_part
+    prs_part = slide.part.package.presentation_part
     slide_w = prs_part.presentation.slide_width or Inches(10)
 
     n = len(kpis)
@@ -297,7 +298,7 @@ def _add_kpi_shapes(slide: Any, kpis: list[dict[str, Any]]) -> None:
         run.text = value
         run.font.size = Pt(32)
         run.font.bold = True
-        p.alignment = 2  # PP_ALIGN.CENTER (2)
+        p.alignment = PP_ALIGN.CENTER
 
         # Label textbox
         label_top = top + Inches(1.0)
@@ -308,7 +309,7 @@ def _add_kpi_shapes(slide: Any, kpis: list[dict[str, Any]]) -> None:
         run2.text = label
         run2.font.size = Pt(12)
         run2.font.color.rgb = RGBColor(0x60, 0x60, 0x60)
-        p2.alignment = 2  # centered
+        p2.alignment = PP_ALIGN.CENTER
 
         # Delta textbox (optional)
         if delta is not None:
@@ -324,7 +325,7 @@ def _add_kpi_shapes(slide: Any, kpis: list[dict[str, Any]]) -> None:
             run3.font.color.rgb = (
                 RGBColor(0x00, 0x8A, 0x00) if float(delta) >= 0 else RGBColor(0xCC, 0x00, 0x00)
             )
-            p3.alignment = 2
+            p3.alignment = PP_ALIGN.CENTER
 
 
 def _run_lint(prs: Any, mode: str) -> None:

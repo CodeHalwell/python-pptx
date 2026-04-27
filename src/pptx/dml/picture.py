@@ -129,6 +129,12 @@ class PictureEffects:
 
     @recolor.setter
     def recolor(self, value: str | None) -> None:
+        # Validate before mutating so an invalid value leaves the existing effect intact.
+        _VALID_RECOLOR = frozenset({"grayscale", "washout", "sepia", "duotone"})
+        if value is not None and value not in _VALID_RECOLOR:
+            raise ValueError(
+                f"recolor must be 'grayscale', 'washout', 'sepia', 'duotone', or None; got {value!r}"
+            )
         self._clear_recolor()
         if value is None:
             return
@@ -138,10 +144,10 @@ class PictureEffects:
             self._blip.get_or_add_biLevel().thresh = 0.5  # type: ignore[assignment]
         elif value == "sepia":
             self.set_duotone(_SEPIA_DARK, _SEPIA_LIGHT)
-        else:
-            raise ValueError(
-                f"recolor must be 'grayscale', 'washout', 'sepia', 'duotone', or None; got {value!r}"
-            )
+        elif value == "duotone":
+            # Default neutral duotone (dark grey → light grey).
+            # For custom colors use set_duotone() instead.
+            self.set_duotone("333333", "EBEBEB")
 
     def set_duotone(self, dark_color: RGBColor | tuple, light_color: RGBColor | tuple) -> None:
         """Apply a duotone recolor using custom dark and light colors.
