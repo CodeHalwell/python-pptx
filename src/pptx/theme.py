@@ -60,11 +60,6 @@ class Theme:
 # ThemeColors
 # ---------------------------------------------------------------------------
 
-#: Maps MSO_THEME_COLOR xml_value (e.g. "accent1") to the child tag of
-#: ``<a:clrScheme>`` that holds it (same string in this case).
-_SLOT_TAG = {member.xml_value: member.xml_value for member in MSO_THEME_COLOR}
-
-
 class ThemeColors:
     """Dict-like read-only view of a theme's color scheme.
 
@@ -131,8 +126,6 @@ def _rgb_from_slot(slot_elm) -> RGBColor | None:
     * ``<a:sysClr … lastClr="RRGGBB">`` → use *lastClr* (resolved system color)
     * Other child types are not yet supported and return ``None``.
     """
-    a_ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
-
     srgb = slot_elm.find(qn("a:srgbClr"))
     if srgb is not None:
         val = srgb.get("val")

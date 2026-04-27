@@ -177,51 +177,6 @@ def _anim_rot_xml(ctn_id: int, spid: int, duration: int, angle_deg: float = 360.
     )
 
 
-def _effect_par_xml(
-    ids: list[int],
-    spid: int,
-    preset_id: int,
-    preset_class: str,
-    preset_subtype: int,
-    grp_id: int,
-    node_type: str,
-    delay: int,
-    behaviors_xml: str,
-) -> str:
-    """Return XML for the inner effect `<p:par>` containing behaviors."""
-    effect_id = ids[0]
-    return (
-        "<p:par>\n"
-        f'  <p:cTn id="{effect_id}" presetID="{preset_id}" presetClass="{preset_class}"'
-        f' presetSubtype="{preset_subtype}" fill="hold"'
-        f' grpId="{grp_id}" nodeType="{node_type}">\n'
-        "    <p:stCondLst>\n"
-        f'      <p:cond delay="{delay}"/>\n'
-        "    </p:stCondLst>\n"
-        "    <p:childTnLst>\n"
-        f"{behaviors_xml}"
-        "    </p:childTnLst>\n"
-        "  </p:cTn>\n"
-        "</p:par>\n"
-    )
-
-
-def _click_group_xml(effect_par_xml: str, wrapper_delay: str) -> str:
-    """Return a full click-group wrapper containing `effect_par_xml`."""
-    return (
-        "<p:par>\n"
-        "  <p:cTn fill=\"hold\">\n"
-        "    <p:stCondLst>\n"
-        f'      <p:cond delay="{wrapper_delay}"/>\n'
-        "    </p:stCondLst>\n"
-        "    <p:childTnLst>\n"
-        f"{effect_par_xml}"
-        "    </p:childTnLst>\n"
-        "  </p:cTn>\n"
-        "</p:par>\n"
-    )
-
-
 # ---------------------------------------------------------------------------
 # SlideAnimations – the object returned by slide.animations
 # ---------------------------------------------------------------------------
@@ -306,10 +261,14 @@ class SlideAnimations:
         trigger: PP_ANIM_TRIGGER = PP_ANIM_TRIGGER.ON_CLICK,
         delay: int = 0,
         duration: int = 1000,
+        degrees: float = 360.0,
     ) -> None:
         """Append an emphasis animation for *shape* to the slide timeline.
 
         *preset* is one of: ``"pulse"``, ``"spin"``, ``"teeter"``.
+
+        *degrees* controls the rotation angle for the ``"spin"`` preset
+        (default: 360 — one full clockwise revolution).
         """
         if preset not in _EMPHASIS_PRESETS:
             raise ValueError(
@@ -317,7 +276,7 @@ class SlideAnimations:
                 f"Choose from: {sorted(_EMPHASIS_PRESETS)}"
             )
         preset_id, preset_subtype = _EMPHASIS_PRESETS[preset]
-        behaviors = self._emphasis_behaviors(preset, shape.shape_id, duration)
+        behaviors = self._emphasis_behaviors(preset, shape.shape_id, duration, degrees)
         self._append_effect(
             shape.shape_id, preset_id, "emph", preset_subtype, trigger, delay, behaviors
         )
@@ -373,12 +332,14 @@ class SlideAnimations:
         # For exit: animEffect first, then hide
         return _anim_effect_xml(ids[0], spid, duration, filter_str, "out") + vis_xml
 
-    def _emphasis_behaviors(self, preset: str, spid: int, duration: int) -> str:
+    def _emphasis_behaviors(
+        self, preset: str, spid: int, duration: int, degrees: float = 360.0
+    ) -> str:
         ids = self._reserve_ids(1)
         if preset == "pulse":
             return _anim_scale_xml(ids[0], spid, duration)
         if preset == "spin":
-            return _anim_rot_xml(ids[0], spid, duration)
+            return _anim_rot_xml(ids[0], spid, duration, angle_deg=degrees)
         if preset == "teeter":
             # Teeter: oscillate rotation ~10 degrees either side
             ang = int(10 * 60000)
@@ -410,16 +371,13 @@ class SlideAnimations:
 
         grp_id, node_type, wrapper_delay = self._resolve_trigger(trigger)
 
-        effect_id = self._next_ctn_id()
-        ids_placeholder = [effect_id]
-
         indent_behaviors = "\n".join(
             "      " + line for line in behaviors_xml.splitlines()
         ) + "\n"
 
         effect_par = (
             "<p:par>\n"
-            f'  <p:cTn id="{effect_id}" presetID="{preset_id}"'
+            f'  <p:cTn id="0" presetID="{preset_id}"'
             f' presetClass="{preset_class}" presetSubtype="{preset_subtype}"'
             f' fill="hold" grpId="{grp_id}" nodeType="{node_type}">\n'
             "    <p:stCondLst>\n"
@@ -774,9 +732,8 @@ class Emphasis:
         duration: int = 1000,
     ) -> None:
         """Shape spins by `degrees` (default: full 360-degree rotation)."""
-        # We pass degrees through duration for now; the behavior builder uses default.
         slide.animations.add_emphasis(
-            "spin", shape, trigger=trigger, delay=delay, duration=duration
+            "spin", shape, trigger=trigger, delay=delay, duration=duration, degrees=degrees
         )
 
     @classmethod
