@@ -259,14 +259,23 @@ class SlideTransition(object):
 
     @duration.setter
     def duration(self, ms: int | None) -> None:
-        transition = self._sld.get_or_add_transition()
         if ms is None:
-            if qn("p14:dur") in transition.attrib:
-                del transition.attrib[qn("p14:dur")]
+            # clearing on a slide that inherits should be a no-op, not a
+            # mutation that introduces an empty `<p:transition>` element
+            transition = self._sld.transition
+            if transition is None:
+                return
+            transition.attrib.pop(qn("p14:dur"), None)
+            # also drop the legacy `spd` bucket; otherwise the getter falls
+            # back to it and reads as still-explicitly-set
+            transition.spd = None
             return
         if ms < 0:
             raise ValueError("duration must be a non-negative integer (milliseconds)")
+        transition = self._sld.get_or_add_transition()
         transition.set(qn("p14:dur"), str(int(ms)))
+        # writing an explicit ms duration supersedes any legacy bucket
+        transition.spd = None
 
     @property
     def advance_on_click(self) -> bool | None:
@@ -278,10 +287,13 @@ class SlideTransition(object):
 
     @advance_on_click.setter
     def advance_on_click(self, value: bool | None) -> None:
-        transition = self._sld.get_or_add_transition()
         if value is None:
+            transition = self._sld.transition
+            if transition is None:
+                return
             transition.advClick = None
             return
+        transition = self._sld.get_or_add_transition()
         transition.advClick = bool(value)
 
     @property
@@ -294,12 +306,15 @@ class SlideTransition(object):
 
     @advance_after.setter
     def advance_after(self, ms: int | None) -> None:
-        transition = self._sld.get_or_add_transition()
         if ms is None:
+            transition = self._sld.transition
+            if transition is None:
+                return
             transition.advTm = None
             return
         if ms < 0:
             raise ValueError("advance_after must be a non-negative integer (milliseconds)")
+        transition = self._sld.get_or_add_transition()
         transition.advTm = int(ms)
 
     def clear(self) -> None:

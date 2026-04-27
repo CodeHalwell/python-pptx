@@ -592,6 +592,49 @@ class DescribeSlideTransition(object):
         transition.clear()  # no-op when no transition is present
         assert sld.transition is None
 
+    def it_clears_legacy_spd_when_clearing_duration(self):
+        """`duration = None` must also drop the legacy `spd` bucket so the
+        getter actually reads `None` afterward (it falls back to `spd`)."""
+        sld = element("p:sld/p:cSld")
+        sld.append(element("p:transition{spd=med}"))
+        transition = SlideTransition(sld)
+        # sanity: getter sees the legacy bucket
+        assert transition.duration == 750
+
+        transition.duration = None
+        assert transition.duration is None
+        assert sld.transition.spd is None
+
+    def it_replaces_legacy_spd_when_setting_an_explicit_duration(self):
+        sld = element("p:sld/p:cSld")
+        sld.append(element("p:transition{spd=fast}"))
+        transition = SlideTransition(sld)
+
+        transition.duration = 1500
+        assert transition.duration == 1500
+        assert sld.transition.spd is None
+
+    @pytest.mark.parametrize(
+        "setter",
+        [
+            ("duration", None),
+            ("advance_on_click", None),
+            ("advance_after", None),
+        ],
+    )
+    def it_does_not_create_a_transition_when_clearing_an_inherited_one(self, setter):
+        """Assigning `None` to an option on a slide that inherits its
+        transition must be a no-op rather than introducing an explicit
+        empty `<p:transition>` element (which would change the resolved
+        behavior from "inherited" to "explicitly none")."""
+        attr_name, value = setter
+        sld = element("p:sld/p:cSld")
+        transition = SlideTransition(sld)
+
+        setattr(transition, attr_name, value)
+
+        assert sld.transition is None
+
 
 class DescribeSlides(object):
     """Unit-test suite for `pptx.slide.Slides` objects."""
