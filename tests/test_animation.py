@@ -145,6 +145,41 @@ class DescribeAnimationSequence:
                 with slide.animations.sequence():
                     pass
 
+    def it_shifts_the_first_effect_by_the_sequence_delay(self):
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        a = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(1))
+        b = slide.shapes.add_shape(1, Inches(1), Inches(3), Inches(2), Inches(1))
+
+        with slide.animations.sequence(delay=750):
+            Entrance.fade(slide, a)
+            Entrance.fade(slide, b)
+
+        cond_delays = [c.get("delay") for c in slide._element.iter(qn("p:cond"))]
+        # Wrapper for first effect (clickEffect) → "indefinite";
+        # inner first effect cond → "750" (the consumed sequence delay);
+        # second effect wrapper → "0"; second inner cond → "0".
+        assert "750" in cond_delays
+        # Sequence delay must be consumed only once — no other "750" entries.
+        assert cond_delays.count("750") == 1
+
+    def it_does_not_shift_a_second_call_when_seq_delay_already_consumed(self):
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        a = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(1))
+        b = slide.shapes.add_shape(1, Inches(1), Inches(3), Inches(2), Inches(1))
+
+        with slide.animations.sequence(delay=300):
+            Entrance.fade(slide, a, delay=100)
+            Entrance.fade(slide, b, delay=50)
+
+        # Per-call delays should land *unchanged* on the second effect;
+        # only the first effect picks up an extra +300 ms from the sequence.
+        cond_delays = [c.get("delay") for c in slide._element.iter(qn("p:cond"))]
+        assert "400" in cond_delays  # first: 100 user + 300 seq
+        assert "50" in cond_delays   # second: 50 user, untouched
+        assert "350" not in cond_delays  # second must not absorb sequence delay
+
 
 class DescribeEntranceByParagraph:
     def it_emits_one_effect_per_paragraph(self):
@@ -198,3 +233,22 @@ class DescribeEntranceByParagraph:
 
         with pytest.raises(ValueError):
             slide.animations.add_entrance("fly_in", tb.text_frame, by_paragraph=True)
+
+    def it_rejects_a_table_cell_text_frame(self):
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        tbl_shape = slide.shapes.add_table(2, 2, Inches(1), Inches(1), Inches(4), Inches(2))
+        cell_tf = tbl_shape.table.cell(0, 0).text_frame
+        cell_tf.text = "cell content"
+
+        with pytest.raises(TypeError, match="parent chain"):
+            Entrance.fade(slide, cell_tf, by_paragraph=True)
+
+    def it_rejects_a_text_frame_when_by_paragraph_is_false(self):
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        tb = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(2), Inches(1))
+        tb.text_frame.text = "x"
+
+        with pytest.raises(TypeError, match="shape_id"):
+            Entrance.fade(slide, tb.text_frame)

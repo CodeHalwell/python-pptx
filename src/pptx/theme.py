@@ -180,9 +180,13 @@ class ThemeColors:
 
         slot_elm = clr_scheme.find(qn(f"a:{slot_name}"))
         if slot_elm is None:
-            # Slot wasn't previously declared (rare but possible); add it.
+            # Slot wasn't previously declared (rare but possible); add
+            # it at the schema-defined position.  CT_ColorScheme
+            # requires its children in a fixed sequence; appending at
+            # the tail would invalidate the file when later slots
+            # (e.g. hlink/folHlink) are already present.
             slot_elm = OxmlElement(f"a:{slot_name}")
-            clr_scheme.append(slot_elm)
+            _insert_clr_scheme_slot(clr_scheme, slot_elm, slot_name)
 
         # Replace the slot's color child with a fresh <a:srgbClr val="...">
         for child in list(slot_elm):
@@ -316,3 +320,43 @@ class ThemeFonts:
             latin = OxmlElement("a:latin")
             kind_elm.insert(0, latin)
         latin.set("typeface", typeface)
+
+
+# ---------------------------------------------------------------------------
+# OOXML schema helpers
+# ---------------------------------------------------------------------------
+
+# CT_ColorScheme defines its children in this exact sequence; later slots
+# (e.g. hlink) must follow earlier ones, and <a:extLst> is allowed last.
+_CLR_SCHEME_SLOT_ORDER: tuple[str, ...] = (
+    "dk1", "lt1", "dk2", "lt2",
+    "accent1", "accent2", "accent3", "accent4", "accent5", "accent6",
+    "hlink", "folHlink",
+)
+
+
+def _insert_clr_scheme_slot(clr_scheme, slot_elm, slot_name: str) -> None:
+    """Insert *slot_elm* into *clr_scheme* at the schema-defined position.
+
+    Finds the first existing child whose schema position is *after*
+    *slot_name* and inserts before it; otherwise appends at the tail
+    (but before any trailing ``<a:extLst>`` if present).
+    """
+    try:
+        target_idx = _CLR_SCHEME_SLOT_ORDER.index(slot_name)
+    except ValueError:
+        # Unknown slot name (shouldn't happen): append at end.
+        clr_scheme.append(slot_elm)
+        return
+
+    for child in clr_scheme:
+        local = child.tag.rsplit("}", 1)[-1]
+        if local == "extLst":
+            clr_scheme.insert(list(clr_scheme).index(child), slot_elm)
+            return
+        if local in _CLR_SCHEME_SLOT_ORDER:
+            child_idx = _CLR_SCHEME_SLOT_ORDER.index(local)
+            if child_idx > target_idx:
+                clr_scheme.insert(list(clr_scheme).index(child), slot_elm)
+                return
+    clr_scheme.append(slot_elm)

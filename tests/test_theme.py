@@ -42,6 +42,23 @@ class DescribeThemeColors:
         with pytest.raises(TypeError):
             theme.colors["accent1"] = RGBColor(0, 0, 0)  # type: ignore[index]
 
+    def it_inserts_a_missing_slot_at_the_schema_defined_position(self, prs):
+        from pptx.oxml.ns import qn
+
+        clr_scheme = prs.theme._theme_elm.find(  # type: ignore[attr-defined]
+            f"{qn('a:themeElements')}/{qn('a:clrScheme')}"
+        )
+        # Remove accent3 to force the writer's missing-slot path
+        accent3 = clr_scheme.find(qn("a:accent3"))
+        clr_scheme.remove(accent3)
+
+        prs.theme.colors[MSO_THEME_COLOR.ACCENT_3] = RGBColor(0x12, 0x34, 0x56)
+
+        order = [c.tag.rsplit("}", 1)[-1] for c in clr_scheme]
+        # Schema-required ordering must be preserved
+        assert order.index("accent2") + 1 == order.index("accent3")
+        assert order.index("accent3") + 1 == order.index("accent4")
+
     def it_overwrites_a_non_srgb_color_child(self, prs):
         # Replace the existing srgbClr in the accent3 slot with sysClr,
         # then verify the writer drops the sysClr and replaces with srgbClr.

@@ -256,9 +256,13 @@ class SlideAnimations:
         # Sequence-context state: when active, the first add_* call uses
         # `_seq_start` as its trigger and subsequent calls default to
         # AFTER_PREVIOUS so effects play one after another from a single click.
+        # `_seq_delay` is added to the first effect's `delay` so that
+        # `sequence(delay=N)` shifts the whole chain forward by N ms.
         self._seq_active: bool = False
         self._seq_start: PP_ANIM_TRIGGER = PP_ANIM_TRIGGER.ON_CLICK
         self._seq_count: int = 0
+        self._seq_delay: int = 0
+        self._seq_delay_consumed: bool = False
 
     # -- public API ----------------------------------------------------------
 
@@ -304,8 +308,15 @@ class SlideAnimations:
             return
 
         # When by_paragraph=False, *shape* must be a BaseShape (something
-        # with a shape_id); enforce at runtime since the union type is
-        # only widened to support the by_paragraph=True case.
+        # with a shape_id).  The union type is only widened to support
+        # the by_paragraph=True case, so guard explicitly here rather
+        # than relying on a duck-typed AttributeError later.
+        if not hasattr(shape, "shape_id"):
+            raise TypeError(
+                f"add_entrance requires a shape with a shape_id; got "
+                f"{type(shape).__name__!r}.  Pass by_paragraph=True to "
+                "animate a TextFrame's paragraphs individually."
+            )
         bshape = cast("BaseShape", shape)
         preset_id, preset_subtype = _ENTRANCE_PRESETS[preset]
         behaviors = self._entrance_behaviors(preset, bshape.shape_id, duration, direction)
@@ -429,12 +440,15 @@ class SlideAnimations:
         self._seq_active = True
         self._seq_start = start
         self._seq_delay = delay
+        self._seq_delay_consumed = False
         self._seq_count = 0
         try:
             yield self
         finally:
             self._seq_active = False
             self._seq_count = 0
+            self._seq_delay = 0
+            self._seq_delay_consumed = False
 
     # -- behavior builders ---------------------------------------------------
 
@@ -544,15 +558,36 @@ class SlideAnimations:
 
         if isinstance(target, _TextFrame):
             text_frame = target
-            shape = cast("BaseShape", target._parent)  # type: ignore[attr-defined]
+            # Walk up the parent chain until we hit something with a
+            # `shape_id` (a |BaseShape|).  TextFrames inside table cells
+            # have an intermediate `_Cell` parent that has no shape_id;
+            # those cells live inside a `GraphicFrame` further up.  If
+            # nothing in the chain has a shape_id, the TextFrame isn't
+            # attached to a slide-level shape and we can't target it.
+            parent = target._parent  # type: ignore[attr-defined]
+            seen: set[int] = set()
+            while parent is not None and not hasattr(parent, "shape_id"):
+                if id(parent) in seen:
+                    parent = None  # cycle guard
+                    break
+                seen.add(id(parent))
+                parent = getattr(parent, "_parent", None)
+            if parent is None or not hasattr(parent, "shape_id"):
+                raise TypeError(
+                    "by_paragraph=True requires a TextFrame whose parent "
+                    "chain reaches a shape; "
+                    f"{type(target._parent).__name__!r} has no shape_id "  # type: ignore[attr-defined]
+                    "ancestor (table-cell text frames are not yet supported)."
+                )
+            shape = cast("BaseShape", parent)
         else:
             text_frame = getattr(target, "text_frame", None)
-            if text_frame is None:
+            if text_frame is None or not hasattr(target, "shape_id"):
                 raise TypeError(
                     "by_paragraph=True requires a TextFrame or a shape with "
-                    f"a text_frame; got {type(target).__name__!r}"
+                    f"a text_frame and shape_id; got {type(target).__name__!r}"
                 )
-            shape = target  # already a BaseShape (it had a .text_frame)
+            shape = cast("BaseShape", target)
 
         spid: int = shape.shape_id
         preset_id, preset_subtype = _ENTRANCE_PRESETS[preset]
@@ -609,6 +644,19 @@ class SlideAnimations:
         self._seq_count += 1
         return PP_ANIM_TRIGGER.AFTER_PREVIOUS
 
+    def _consume_sequence_delay(self, delay: int) -> int:
+        """Add the sequence's ``delay`` to the first effect's *delay*.
+
+        ``sequence(delay=N)`` shifts the whole chain by N ms, so the
+        sequence-level delay is added to the first effect's per-call
+        ``delay`` and never applied again within the same block.
+        Returns *delay* unchanged when no sequence is active.
+        """
+        if self._seq_active and not self._seq_delay_consumed:
+            self._seq_delay_consumed = True
+            return delay + self._seq_delay
+        return delay
+
     # -- timing tree management ----------------------------------------------
 
     def _append_effect(
@@ -625,6 +673,7 @@ class SlideAnimations:
         root_ctn = self._get_or_create_root_ctn()
 
         trigger = self._resolve_default_trigger(trigger)
+        delay = self._consume_sequence_delay(delay)
         grp_id, node_type, wrapper_delay = self._resolve_trigger(trigger)
 
         indent_behaviors = "\n".join(
