@@ -39,6 +39,7 @@ Typical usage::
 
 from __future__ import annotations
 
+import math
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Iterator, cast
 
@@ -1320,8 +1321,6 @@ class MotionPath:
         """
         if turns == 0:
             raise ValueError("turns must be non-zero")
-        import math
-
         slide_w, slide_h = _slide_dimensions_emu(slide)
         rx = float(radius) / slide_w
         ry = float(radius) / slide_h
