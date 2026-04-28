@@ -13,12 +13,15 @@ This is an *optional* feature with no hard dependency: callers must have
 functions raise :class:`ThumbnailRendererUnavailable` with an actionable
 hint so the failure mode is obvious.
 
-The renderer prefers ``soffice``'s built-in ``png_Portable_Network_Graphic``
-filter, which produces one PNG per slide named ``<deck>-<index>.png``
-(0-based).  Older LibreOffice versions only render slide 1 with the
-plain ``-convert-to png`` shorthand; we work around that by issuing
-``--convert-to "png:impress_png_Export:..."`` with a slide range when
-asked for a specific slide.
+The current implementation shells out with plain ``--convert-to png``
+and relies on LibreOffice to emit PNG files for the presentation —
+typically one per slide named ``<deck>-<index>.png``, though the exact
+naming and per-slide vs. first-slide-only behavior varies between
+LibreOffice versions.  When callers request a specific slide via
+``slide_indexes=``, the renderer still converts the whole deck and
+filters the generated files in Python rather than asking ``soffice``
+for a slide-range export; that's deliberately simple and matches the
+broadest version compatibility.
 
 The shell-out is deliberately quarantined to a single small module so
 the rest of the library never depends on subprocess or LibreOffice.
@@ -134,6 +137,13 @@ def render_slide_thumbnails(
         deck_path = work_dir / "_render_input.pptx"
         _save_to_path(prs, deck_path)
 
+        # Snapshot any PNGs already in `work_dir` so we can later
+        # subtract them from the result set.  Otherwise, when a caller
+        # points `out_dir=` at a non-empty directory (a shared artifacts
+        # folder, a cache, …) stray PNGs get treated as slide renders
+        # and corrupt `slide_indexes` lookups / out-of-range errors.
+        preexisting_pngs = {p.name for p in work_dir.glob("*.png")}
+
         result = _run_soffice(bin_path, deck_path, work_dir, timeout)
         if result.returncode != 0:
             raise ThumbnailRendererError(
@@ -142,7 +152,11 @@ def render_slide_thumbnails(
             )
 
         png_paths = sorted(
-            (p for p in work_dir.glob("*.png") if p.name != deck_path.name),
+            (
+                p
+                for p in work_dir.glob("*.png")
+                if p.name != deck_path.name and p.name not in preexisting_pngs
+            ),
             key=_natural_sort_key,
         )
         if not png_paths:

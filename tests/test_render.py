@@ -241,6 +241,41 @@ class DescribeNaturalSort:
         assert paths[0].name == "deck-10.png"
 
 
+class DescribePngFiltering:
+    """`render_slide_thumbnails` must ignore PNGs already in `out_dir`."""
+
+    def it_ignores_preexisting_pngs_in_the_output_directory(self, tmp_path, two_slide_prs):
+        # Drop a stray PNG in the directory before rendering — perhaps
+        # left over from a previous job or simply present in a shared
+        # artifacts folder.
+        (tmp_path / "stale.png").write_bytes(b"\x89PNG\r\n\x1a\nstale")
+
+        with patch("pptx.render.shutil.which", return_value="/usr/bin/soffice"), patch(
+            "pptx.render._run_soffice", side_effect=_fake_soffice_run(tmp_path)
+        ):
+            paths = render_slide_thumbnails(two_slide_prs, out_dir=tmp_path)
+
+        names = {p.name for p in paths}
+        assert "stale.png" not in names
+        assert len(paths) == 2  # two slides, not three
+
+    def it_keeps_indexes_aligned_when_strays_are_present(self, tmp_path, two_slide_prs):
+        # A stray that would lex-sort *between* the two genuine outputs.
+        (tmp_path / "slide05.png").write_bytes(b"\x89PNG\r\n\x1a\nstale")
+
+        with patch("pptx.render.shutil.which", return_value="/usr/bin/soffice"), patch(
+            "pptx.render._run_soffice", side_effect=_fake_soffice_run(tmp_path)
+        ):
+            paths = render_slide_thumbnails(
+                two_slide_prs, out_dir=tmp_path, slide_indexes=[1]
+            )
+
+        # Without the filter we'd risk returning slide05.png; with it,
+        # index 1 maps to the genuine second render (slide1.png from the
+        # fake runner, which writes slide{0,1}.png).
+        assert paths[0].name == "slide1.png"
+
+
 class DescribeRenderSlideThumbnailCleanup:
     """The single-slide renderer must not leak temp directories."""
 
