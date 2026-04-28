@@ -13,6 +13,7 @@ land.
 from __future__ import annotations
 
 import os
+import sys
 
 from pptx import Presentation
 from pptx.design.recipes import (
@@ -22,7 +23,16 @@ from pptx.design.recipes import (
     title_slide,
 )
 
-from . import classic, editorial, modern
+# Support both invocation styles documented in README.md:
+#   python examples/starter_pack/build_preview.py        (no __package__)
+#   python -m examples.starter_pack.build_preview        (relative import)
+if __package__:
+    from . import classic, editorial, modern
+else:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import classic  # type: ignore[import-not-found,no-redef]
+    import editorial  # type: ignore[import-not-found,no-redef]
+    import modern  # type: ignore[import-not-found,no-redef]
 
 
 SETS = {
