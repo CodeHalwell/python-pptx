@@ -65,6 +65,20 @@ class Chart(PartElementProxy):
             return
         self._chartSpace._add_style(val=value)
 
+    def apply_quick_layout(self, layout):
+        """Apply a "quick layout" preset to this chart.
+
+        `layout` is either the name of a built-in preset (see
+        :func:`pptx.chart.quick_layouts.layout_names`) or a dict spec.
+        Toggles title / legend / axis-title / gridline visibility in
+        opinionated combinations, mirroring PowerPoint's *Chart Design →
+        Quick Layout* gallery.  Missing spec keys leave the chart
+        untouched, so layouts can be composed by calling this twice.
+        """
+        from pptx.chart.quick_layouts import apply_quick_layout
+
+        apply_quick_layout(self, layout)
+
     def apply_palette(self, palette):
         """Recolor every series in this chart from a palette of solid colors.
 

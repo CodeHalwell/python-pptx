@@ -93,6 +93,71 @@ Phase 10 — chart palette presets
   in with regression tests covering the four gradient kinds and
   ``MSO_PATTERN_TYPE`` patterns.
 
+Phase 6 — theme-aware color inheritance
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- New ``pptx.inherit.resolve_color(color_format, theme=...)`` returns
+  the effective ``RGBColor`` for any ``ColorFormat`` (including the
+  ``_LazyColorFormat`` proxy returned by ``Font.color`` /
+  ``LineFormat.color``).  Explicit RGB colors are returned as-is,
+  scheme colors resolve through ``theme.colors[…]``, and unset colors
+  return ``None`` without mutating XML.  ``brightness`` is applied by
+  blending the resolved RGB toward white or black, mirroring
+  PowerPoint's ``lumMod`` / ``lumOff`` model.
+
+Phase 6 — native SVG in ``add_picture``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- New ``slide.shapes.add_svg_picture(svg_file, left, top, width=None,
+  height=None, *, png_fallback=None)`` embeds both an
+  ``<asvg:svgBlip>`` (Office 2016+ SVG extension) and a PNG fallback
+  inside the same ``<a:blip>``.  When ``png_fallback`` is omitted the
+  SVG is rasterised through the optional ``cairosvg`` dependency; a
+  clear ``CairoSvgUnavailable`` error guides callers to install it or
+  supply their own fallback.  ``image/svg+xml`` is registered as a
+  first-class image content type so SVG parts round-trip cleanly.
+
+Phase 7 — ``pptx.compose`` package
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- ``pptx.compose`` is now a real package re-exporting ``from_spec``,
+  ``import_slide``, and ``apply_template`` from a single import path::
+
+      from pptx.compose import from_spec, import_slide, apply_template
+
+  The implementations live in private submodules
+  (``pptx.compose.from_spec``, ``pptx._slide_importer``,
+  ``pptx._template_applier``).  Existing imports (``from pptx.compose
+  import from_spec``) are unchanged.
+
+Phase 10 — chart quick layouts
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- ``Chart.apply_quick_layout(layout)`` toggles title / legend /
+  axis-title / gridline visibility in opinionated combinations.  Ten
+  built-in presets ship in ``pptx.chart.quick_layouts``
+  (``title_legend_right``, ``title_legend_bottom``,
+  ``title_legend_top``, ``title_legend_left``, ``title_no_legend``,
+  ``no_title_no_legend``, ``title_axes_legend_right``,
+  ``title_axes_legend_bottom``, ``minimal``, ``dense``); custom layouts
+  can be supplied as a dict spec.
+
+Phase 10 — slide-thumbnail renderer
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- New ``pptx.render`` module with
+  ``render_slide_thumbnails(prs, ...)`` and
+  ``render_slide_thumbnail(slide, ...)``, plus convenience methods
+  ``Presentation.render_thumbnails()`` and ``Slide.render_thumbnail()``.
+  Drives a headless ``soffice --headless --convert-to png`` shell-out
+  to rasterise slides; supports custom binary path
+  (``soffice_bin=`` or ``POWER_PPTX_SOFFICE`` env var), per-slide
+  selection (``slide_indexes=``), bytes-or-paths return
+  (``return_bytes=True``), custom output directory, and a configurable
+  timeout.  Raises ``ThumbnailRendererUnavailable`` with an install
+  hint when ``soffice`` isn't on PATH and ``ThumbnailRendererError``
+  on conversion failure.
+
 Phase 6 — text-fit estimator on Linux / minimal runtimes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
