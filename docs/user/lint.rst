@@ -43,6 +43,21 @@ Issue types
 * :class:`power_pptx.lint.ShapeCollision` — two shapes' bounding boxes overlap
   significantly.  See :ref:`lint-groups` for how to suppress collisions that
   reflect intentional layering.
+* :class:`power_pptx.lint.MinFontSize` — a text run is below the configured
+  legibility threshold (default 9pt).
+* :class:`power_pptx.lint.OffGridDrift` — a shape's left or top edge is
+  slightly off a dominant column/row that several other shapes hit cleanly.
+  Auto-fixable: :meth:`SlideLintReport.auto_fix` snaps the drifted edge onto
+  the grid.
+* :class:`power_pptx.lint.LowContrast` — text and resolved background fill
+  have a WCAG contrast ratio below 4.5:1.  Resolves only solid RGB fills
+  (theme colors and gradients are skipped silently to avoid false
+  positives).
+* :class:`power_pptx.lint.ZOrderAnomaly` — a filled shape is drawn above a
+  shape it visually contains, hiding the inner shape at render time.
+* :class:`power_pptx.lint.MasterPlaceholderCollision` — a non-placeholder
+  shape sits at exactly the position of a layout placeholder it should
+  likely have inherited from instead of redrawing.
 
 Each issue carries a ``severity`` (:class:`~power_pptx.lint.LintSeverity`),
 a ``code`` string, a human-readable ``message``, and a ``shapes``

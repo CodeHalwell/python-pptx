@@ -55,6 +55,75 @@ if TYPE_CHECKING:
 #: Short alias; application code reads ``Trigger.ON_CLICK`` more naturally.
 Trigger = PP_ANIM_TRIGGER
 
+
+# ---------------------------------------------------------------------------
+# Easing curves
+# ---------------------------------------------------------------------------
+
+#: Named easings -> ``(accel, decel)`` fractions of the animation duration
+#: spent in acceleration / deceleration phases.  Each value is between 0.0
+#: and 1.0.  These four cover the common cases; pass an explicit
+#: ``(accel, decel)`` tuple for anything else.
+_EASING_PRESETS = {
+    "linear": (0.0, 0.0),
+    "ease_in": (0.5, 0.0),
+    "ease_out": (0.0, 0.5),
+    "ease_in_out": (0.3, 0.3),
+}
+
+
+def _resolve_easing(easing) -> tuple[float, float]:
+    """Resolve an ``easing`` argument to an ``(accel, decel)`` 2-tuple."""
+    if isinstance(easing, str):
+        try:
+            return _EASING_PRESETS[easing]
+        except KeyError:
+            raise ValueError(
+                "unknown easing preset %r; choose from %r or pass an "
+                "explicit (accel, decel) tuple"
+                % (easing, sorted(_EASING_PRESETS))
+            )
+    if (
+        isinstance(easing, tuple)
+        and len(easing) == 2
+        and all(isinstance(v, (int, float)) for v in easing)
+    ):
+        accel, decel = float(easing[0]), float(easing[1])
+        if not (0.0 <= accel <= 1.0 and 0.0 <= decel <= 1.0 and accel + decel <= 1.0):
+            raise ValueError(
+                "easing accel and decel must each be in [0, 1] and sum to ≤ 1"
+            )
+        return accel, decel
+    raise TypeError(
+        "easing must be a preset name (e.g. 'ease_in_out') or an "
+        "(accel, decel) 2-tuple of floats"
+    )
+
+
+def _apply_easing(group_elm, easing) -> None:
+    """Stamp ``accel`` / ``decel`` onto every animation-duration ``<p:cTn>``.
+
+    Operates only on ``<p:cTn>`` elements whose ``dur`` attribute is a
+    positive integer greater than 1 — those are the "effect-level" timing
+    nodes that drive the actual animation, not the wrapper / 1-frame
+    visibility nodes.
+    """
+    accel, decel = _resolve_easing(easing)
+    accel_pct = int(round(accel * 100000))
+    decel_pct = int(round(decel * 100000))
+    for ctn in group_elm.iter(qn("p:cTn")):
+        dur = ctn.get("dur")
+        try:
+            dur_i = int(dur) if dur is not None else 0
+        except ValueError:
+            continue
+        if dur_i <= 1:
+            continue
+        if accel_pct:
+            ctn.set("accel", str(accel_pct))
+        if decel_pct:
+            ctn.set("decel", str(decel_pct))
+
 # Sentinel for "trigger not specified" — lets `sequence()` distinguish an
 # explicit caller-supplied trigger from the default.  Don't use ``None``
 # because that's a valid attribute value elsewhere.
@@ -277,6 +346,7 @@ class SlideAnimations:
         duration: int = 500,
         direction: str = "bottom",
         by_paragraph: bool = False,
+        easing: str | tuple[float, float] | None = None,
     ) -> None:
         """Append an entrance animation for *shape* to the slide timeline.
 
@@ -322,7 +392,8 @@ class SlideAnimations:
         preset_id, preset_subtype = _ENTRANCE_PRESETS[preset]
         behaviors = self._entrance_behaviors(preset, bshape.shape_id, duration, direction)
         self._append_effect(
-            bshape.shape_id, preset_id, "entr", preset_subtype, trigger, delay, behaviors
+            bshape.shape_id, preset_id, "entr", preset_subtype, trigger, delay,
+            behaviors, easing=easing,
         )
 
     def add_exit(
@@ -669,6 +740,8 @@ class SlideAnimations:
         trigger: PP_ANIM_TRIGGER,
         delay: int,
         behaviors_xml: str,
+        *,
+        easing: str | tuple[float, float] | None = None,
     ) -> None:
         """Build the animation XML and insert it into the slide timing tree."""
         root_ctn = self._get_or_create_root_ctn()
@@ -713,6 +786,8 @@ class SlideAnimations:
         # Fix IDs: assign proper sequential IDs to all p:cTn elements in our
         # new subtree now that we know which IDs are free.
         self._assign_ids(group_elm)
+        if easing is not None:
+            _apply_easing(group_elm, easing)
         root_ctn.append(group_elm)
 
     def _get_or_create_root_ctn(self):
@@ -744,6 +819,97 @@ class SlideAnimations:
         for ctn in group_elm.iter(qn("p:cTn")):
             ctn.set("id", str(next_id))
             next_id += 1
+
+    # ---- multi-shape sequence helpers --------------------------------------
+
+    def typewriter(
+        self,
+        shapes,
+        *,
+        preset: str = "wipe",
+        delay_between_ms: int = 200,
+        duration: int = 300,
+        start: PP_ANIM_TRIGGER = PP_ANIM_TRIGGER.ON_CLICK,
+        direction: str = "left",
+    ) -> None:
+        """One-line cascade entrance across an iterable of *shapes*.
+
+        Replaces the manual ``with self.sequence(): for s in shapes: ...``
+        boilerplate.  Each shape's entrance fires ``delay_between_ms``
+        after the previous one, all under a single click trigger
+        (``start``).
+
+        Default uses the ``"wipe"`` preset, which is the closest visual
+        analogue to a typewriter reveal; pass any other entrance preset
+        (``"fade"``, ``"appear"``, etc.) for the effect of your choice.
+
+        Example::
+
+            slide.animations.typewriter(
+                [bullet1, bullet2, bullet3], delay_between_ms=200
+            )
+        """
+        shapes = list(shapes)
+        if not shapes:
+            return
+        with self.sequence(start=start):
+            for i, shape in enumerate(shapes):
+                self.add_entrance(
+                    preset,
+                    shape,
+                    delay=0 if i == 0 else delay_between_ms,
+                    duration=duration,
+                    direction=direction,
+                )
+
+    # ---- orphan cleanup ----------------------------------------------------
+
+    def purge_orphans(self) -> int:
+        """Remove animation entries whose target shape no longer exists.
+
+        Walks the slide's timing tree and removes any top-level click-group
+        ``<p:par>`` that contains a ``spid`` reference to a shape that's no
+        longer in the slide's shape tree.  Use this after deleting shapes
+        to clean up the timing tree (PowerPoint will silently "repair"
+        a deck with orphan timing references, but a clean tree avoids
+        that prompt).
+
+        Returns the number of orphan ``<p:par>`` entries removed.
+
+        This is also called automatically when a shape is removed via
+        :meth:`BaseShape.delete`, but is exposed publicly for callers
+        that delete shapes by other means.
+        """
+        sld = self._slide._element
+        # Collect live shape ids from the spTree.
+        live_ids: set[int] = set()
+        for cNvPr in sld.xpath("p:cSld/p:spTree//p:cNvPr"):
+            try:
+                live_ids.add(int(cNvPr.get("id")))
+            except (TypeError, ValueError):
+                continue
+
+        # The click-group <p:par> elements live as children of the root
+        # timing's childTnLst: p:timing/p:tnLst/p:par/p:cTn/p:childTnLst/p:par.
+        root_pars = sld.xpath("p:timing/p:tnLst/p:par/p:cTn/p:childTnLst/p:par")
+
+        removed = 0
+        spTgt_tag = qn("p:spTgt")
+        for top_par in list(root_pars):
+            spTgts = list(top_par.iter(spTgt_tag))
+            for spTgt in spTgts:
+                spid_attr = spTgt.get("spid")
+                try:
+                    spid = int(spid_attr) if spid_attr is not None else None
+                except ValueError:
+                    continue
+                if spid is not None and spid not in live_ids:
+                    parent = top_par.getparent()
+                    if parent is not None:
+                        parent.remove(top_par)
+                        removed += 1
+                    break  # already removed; no need to check more spTgts
+        return removed
 
     def _resolve_trigger(
         self, trigger: PP_ANIM_TRIGGER

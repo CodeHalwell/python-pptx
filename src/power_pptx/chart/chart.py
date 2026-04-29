@@ -65,19 +65,19 @@ class Chart(PartElementProxy):
             return
         self._chartSpace._add_style(val=value)
 
-    def apply_quick_layout(self, layout):
+    def apply_quick_layout(self, layout, **overrides):
         """Apply a "quick layout" preset to this chart.
 
         `layout` is either the name of a built-in preset (see
         :func:`power_pptx.chart.quick_layouts.layout_names`) or a dict spec.
-        Toggles title / legend / axis-title / gridline visibility in
-        opinionated combinations, mirroring PowerPoint's *Chart Design →
-        Quick Layout* gallery.  Missing spec keys leave the chart
-        untouched, so layouts can be composed by calling this twice.
+        Any keyword arguments are merged on top of the resolved preset and
+        override the named-layout values where they collide — e.g.::
+
+            chart.apply_quick_layout("title_legend_right", title_text="Q4 ARR")
         """
         from power_pptx.chart.quick_layouts import apply_quick_layout
 
-        apply_quick_layout(self, layout)
+        apply_quick_layout(self, layout, **overrides)
 
     def apply_palette(self, palette):
         """Recolor every series in this chart from a palette of solid colors.
@@ -101,6 +101,35 @@ class Chart(PartElementProxy):
             fill = series.format.fill
             fill.solid()
             fill.fore_color.rgb = colors[idx % len(colors)]
+
+    def color_by_category(self, palette):
+        """Recolor every *data point* (category) instead of every series.
+
+        Useful for stacked-bar / stacked-column charts where you want each
+        category segment within a stack to read as a discrete color. Also
+        works for single-series column/bar charts (each bar gets its own
+        color).
+
+        `palette` accepts the same forms as :meth:`apply_palette`: a
+        named preset, or an iterable of color-likes.
+
+        For each series, the palette is walked in order across the
+        category points, wrapping when there are more categories than
+        colors. The palette is the same for every series so a given
+        category index resolves to the same color across the whole chart.
+        """
+        from power_pptx.chart.palettes import resolve_palette
+
+        colors = resolve_palette(palette)
+        for series in self.series:
+            try:
+                points = series.points
+            except AttributeError:
+                continue
+            for cat_idx, point in enumerate(points):
+                fill = point.format.fill
+                fill.solid()
+                fill.fore_color.rgb = colors[cat_idx % len(colors)]
 
     @property
     def chart_title(self):

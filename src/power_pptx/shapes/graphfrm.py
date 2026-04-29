@@ -171,6 +171,72 @@ class GraphicFrame(BaseShape):
         tbl = self._graphicFrame.graphic.graphicData.tbl
         return Table(tbl, self)
 
+    def render_to_png(self, **kwargs):
+        """Render this graphic frame's region to a PNG.
+
+        Renders the parent slide via headless LibreOffice (the same path
+        used by :meth:`Slide.render_thumbnail`), then crops the result to
+        this frame's bounding box.  Useful for getting a standalone
+        chart / table image out of a deck.
+
+        Forwards keyword arguments (``out_path``, ``soffice_bin``,
+        ``timeout``) to :meth:`Slide.render_thumbnail`.  ``return_bytes``
+        is also supported and returns the cropped PNG bytes directly.
+
+        Requires :pypi:`Pillow` for cropping (already a power-pptx
+        dependency) and ``soffice`` on PATH.
+        """
+        from io import BytesIO
+
+        try:
+            from PIL import Image
+        except ImportError as e:  # pragma: no cover - Pillow is a dep
+            raise RuntimeError(
+                "render_to_png requires Pillow; install power-pptx[render]"
+            ) from e
+
+        return_bytes = kwargs.pop("return_bytes", False)
+        out_path = kwargs.pop("out_path", None)
+
+        slide = self.part.slide
+        png_bytes = slide.render_thumbnail(return_bytes=True, **kwargs)
+
+        with Image.open(BytesIO(png_bytes)) as img:
+            # Compute pixel bounds of this graphic frame from the EMU-vs-pixel
+            # scale of the rendered slide.
+            prs = self.part.package.presentation_part.presentation
+            slide_w_emu = int(prs.slide_width or 9144000)
+            slide_h_emu = int(prs.slide_height or 6858000)
+            scale_x = img.width / slide_w_emu
+            scale_y = img.height / slide_h_emu
+            left = int(int(self.left) * scale_x)
+            top = int(int(self.top) * scale_y)
+            right = int((int(self.left) + int(self.width)) * scale_x)
+            bottom = int((int(self.top) + int(self.height)) * scale_y)
+            cropped = img.crop((left, top, right, bottom))
+            buf = BytesIO()
+            cropped.save(buf, format="PNG")
+            data = buf.getvalue()
+
+        if return_bytes:
+            return data
+        if out_path is not None:
+            from pathlib import Path
+
+            target = Path(out_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            return target
+        # No destination given: persist to a stable temp file.
+        import os
+        import tempfile
+        from pathlib import Path
+
+        fd, persistent = tempfile.mkstemp(prefix="pptx-frame-", suffix=".png")
+        os.close(fd)
+        Path(persistent).write_bytes(data)
+        return Path(persistent)
+
 
 class _OleFormat(ParentedElementProxy):
     """Provides attributes on an embedded OLE object."""

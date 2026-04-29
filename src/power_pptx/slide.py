@@ -531,6 +531,97 @@ class Slide(_BaseSlide):
         """|SlideLayout| object this slide inherits appearance from."""
         return self.part.slide_layout
 
+    @property
+    def color_variant(self) -> str | None:
+        """Per-slide color-mapping variant: ``"light"`` / ``"dark"`` / |None|.
+
+        Reads / writes the ``<p:clrMapOvr>`` element to apply a built-in
+        light or dark variant of the deck's master color map. ``"light"``
+        is the master's default mapping (``bg1=lt1``, ``tx1=dk1``, …);
+        ``"dark"`` swaps backgrounds and text (``bg1=dk1``, ``tx1=lt1``,
+        …) for a dark-on-light slide without changing the deck theme.
+
+        Reading returns:
+
+        * ``"dark"``  — slide has an explicit override that swaps bg/tx.
+        * ``"light"`` — slide inherits from the master (or has an
+          explicit ``<a:masterClrMapping/>`` element).
+        * ``None``    — slide has a custom override that doesn't match
+          either of the two named variants.
+
+        Assigning ``None`` removes the override entirely (returning to
+        master inheritance).
+
+        For more flexible control, use :meth:`set_clr_map_override`.
+        """
+        clr_ovr = self._element.clrMapOvr
+        if clr_ovr is None:
+            return "light"
+        # If <a:masterClrMapping/> is present we're inheriting.
+        for child in clr_ovr:
+            local = child.tag.rsplit("}", 1)[-1]
+            if local == "masterClrMapping":
+                return "light"
+            if local == "overrideClrMapping":
+                if (
+                    child.get("bg1") == "dk1"
+                    and child.get("tx1") == "lt1"
+                    and child.get("bg2") == "dk2"
+                    and child.get("tx2") == "lt2"
+                ):
+                    return "dark"
+                return None
+        return None
+
+    @color_variant.setter
+    def color_variant(self, value: str | None) -> None:
+        if value is None:
+            self._element._remove_clrMapOvr()
+            return
+        if value == "light":
+            self.set_clr_map_override(masterClrMapping=True)
+            return
+        if value == "dark":
+            self.set_clr_map_override(
+                bg1="dk1", tx1="lt1", bg2="dk2", tx2="lt2",
+                accent1="accent1", accent2="accent2", accent3="accent3",
+                accent4="accent4", accent5="accent5", accent6="accent6",
+                hlink="hlink", folHlink="folHlink",
+            )
+            return
+        raise ValueError(
+            f"color_variant must be 'light', 'dark', or None; got {value!r}"
+        )
+
+    def set_clr_map_override(self, *, masterClrMapping: bool = False, **mapping: str) -> None:
+        """Set this slide's ``<p:clrMapOvr>`` element directly.
+
+        With ``masterClrMapping=True`` (and no other args), removes any
+        existing override and writes ``<a:masterClrMapping/>`` so the
+        slide inherits the master's color map.
+
+        Otherwise, writes an ``<a:overrideClrMapping>`` with the supplied
+        attributes.  Standard mapping attributes are ``bg1``, ``tx1``,
+        ``bg2``, ``tx2``, ``accent1``..``accent6``, ``hlink``,
+        ``folHlink``; each value is the slot it should resolve to
+        (e.g. ``bg1="dk1"`` redirects "background 1" lookups to the
+        ``dk1`` palette slot).
+
+        Use :attr:`color_variant` for the common light/dark presets.
+        """
+        clr_ovr = self._element.get_or_add_clrMapOvr()
+        # Clear existing children.
+        for child in list(clr_ovr):
+            clr_ovr.remove(child)
+
+        a_ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
+        if masterClrMapping and not mapping:
+            child = etree.SubElement(clr_ovr, "{%s}masterClrMapping" % a_ns)
+            return
+        child = etree.SubElement(clr_ovr, "{%s}overrideClrMapping" % a_ns)
+        for k, v in mapping.items():
+            child.set(k, v)
+
     @lazyproperty
     def transition(self) -> SlideTransition:
         """|SlideTransition| object describing the transition into this slide.
