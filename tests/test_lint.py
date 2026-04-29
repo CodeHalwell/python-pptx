@@ -120,6 +120,19 @@ class DescribeShapeLintGroup:
         assert _LEGACY_LINT_GROUP_ATTR not in cNvPr.attrib
         assert _find_lint_ext(cNvPr) is not None
 
+    def it_preserves_lint_skip_when_clearing_lint_group(self):
+        # P1 regression: ``lint_group = None`` must not wipe co-located
+        # ``lint_skip`` codes.  Both live under the same ``<a:ext>`` block,
+        # so the clear must remove only the ``<pp:lintGroup>`` node and
+        # leave any sibling ``<pp:lintSkip>`` intact.
+        _, slide = _new_blank_slide()
+        s = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        s.lint_group = "card-1"
+        s.lint_skip = {"MinFontSize"}
+        s.lint_group = None
+        assert s.lint_group is None
+        assert s.lint_skip == frozenset({"MinFontSize"})
+
 
 class DescribeSlideLintGroupBatch:
     """``slide.lint_group(name, *shapes)`` batch tagger."""
@@ -293,6 +306,54 @@ class DescribeShapeLintSkip:
         s.lint_skip = {"MinFontSize"}
         s.lint_skip = set()
         assert s.lint_skip == frozenset()
+
+    def it_preserves_lint_group_when_lint_skip_changes(self):
+        _, slide = _new_blank_slide()
+        s = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        s.lint_group = "card-1"
+        s.lint_skip = {"MinFontSize"}
+        # Mutating lint_skip mustn't disturb lint_group, and vice versa.
+        s.lint_skip = {"TextOverflow"}
+        assert s.lint_group == "card-1"
+        s.lint_skip = set()
+        assert s.lint_group == "card-1"
+
+    def it_rejects_empty_or_comma_containing_codes(self):
+        _, slide = _new_blank_slide()
+        s = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        with pytest.raises(ValueError):
+            s.lint_skip = {""}
+        with pytest.raises(ValueError):
+            s.lint_skip = {"   "}
+        with pytest.raises(ValueError):
+            s.lint_skip = {"foo,bar"}
+
+    def it_rejects_non_string_codes(self):
+        _, slide = _new_blank_slide()
+        s = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        with pytest.raises(TypeError):
+            s.lint_skip = {None}  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            s.lint_skip = {42}  # type: ignore[arg-type]
+
+    def it_strips_whitespace_around_codes(self):
+        _, slide = _new_blank_slide()
+        s = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        s.lint_skip = {"  MinFontSize  "}
+        assert s.lint_skip == frozenset({"MinFontSize"})
+
+    def it_migrates_legacy_attribute_on_lint_skip_write(self):
+        # P2 regression: decks saved with 2.1.0 carry a custom-namespace
+        # attribute on cNvPr.  Touching only ``lint_skip`` (without ever
+        # setting ``lint_group``) must still strip that legacy attribute,
+        # otherwise the schema-invalid XML survives the round-trip and
+        # PowerPoint keeps "repairing" the file.
+        _, slide = _new_blank_slide()
+        s = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        cNvPr = s._element._nvXxPr.cNvPr
+        cNvPr.set(_LEGACY_LINT_GROUP_ATTR, "card-1")
+        s.lint_skip = {"MinFontSize"}
+        assert _LEGACY_LINT_GROUP_ATTR not in cNvPr.attrib
 
     def it_suppresses_a_per_shape_min_font_size_warning(self):
         _, slide = _new_blank_slide()

@@ -342,6 +342,11 @@ class CT_NonVisualDrawingProps(BaseOxmlElement):
     _tag_seq = ("a:hlinkClick", "a:hlinkHover", "a:extLst")
     hlinkClick: CT_Hyperlink | None = ZeroOrOne("a:hlinkClick", successors=_tag_seq[1:])
     hlinkHover: CT_Hyperlink | None = ZeroOrOne("a:hlinkHover", successors=_tag_seq[2:])
+    # ``a:extLst`` is the official OOXML extension hook on cNvPr.  The
+    # descriptor's ``get_or_add_extLst()`` keeps schema-correct child
+    # ordering (after hlinkClick / hlinkHover) so callers don't have to
+    # hand-roll insertion.
+    extLst = ZeroOrOne("a:extLst", successors=())
     id = RequiredAttribute("id", ST_DrawingElementId)
     name = RequiredAttribute("name", XsdString)
     del _tag_seq
