@@ -91,6 +91,14 @@ def title_slide(
     Uses the ``Blank`` layout so the recipe owns the geometry and styling
     decisions end-to-end.  Title text is centered horizontally and sits in
     the top half of the slide; the subtitle, if provided, sits just below.
+
+    Tokens consumed:
+
+    * **palette** — title color from ``primary`` (fallback ``neutral``);
+      subtitle color from ``muted`` (fallback ``neutral``).
+    * **typography** — ``heading`` for the title, ``body`` for the
+      subtitle.  Both fall back to Calibri at sensible sizes when the
+      token isn't set.
     """
     slide = _add_blank(prs)
     slide_w, slide_h = _slide_dims(prs)
@@ -137,7 +145,15 @@ def bullet_slide(
     tokens: Optional[DesignTokens] = None,
     transition: Optional[str] = None,
 ) -> "Slide":
-    """Append a title + bulleted-content slide and return it."""
+    """Append a title + bulleted-content slide and return it.
+
+    Tokens consumed:
+
+    * **palette** — title from ``primary`` (fallback ``neutral``);
+      bullet text from ``neutral``.
+    * **typography** — ``heading`` for the title, ``body`` for the bullet
+      lines.
+    """
     slide = _add_blank(prs)
     slide_w, slide_h = _slide_dims(prs)
 
@@ -189,10 +205,32 @@ def kpi_slide(
 ) -> "Slide":
     """Append a title + KPI card-row slide and return it.
 
-    Each KPI dict accepts ``label``, ``value``, and an optional ``delta``
-    float (rendered as a signed percentage; positive deltas are tinted
-    with the palette's ``positive`` slot, negative with ``negative``,
-    falling back to green/red).
+    Each KPI dict accepts:
+
+    * ``label`` — the small caption under the value.
+    * ``value`` — the headline number / string.
+    * ``delta`` *(optional)* — numeric change.  Magnitude with absolute
+      value at most ``1.0`` is treated as a fraction (``0.27`` → ``+27%``);
+      anything larger is rendered as-is with one decimal
+      (``14.0`` → ``+14.0``).  Pass a *string* to opt out of the
+      auto-format and render the delta verbatim (``"+14 pts"``,
+      ``"−$2.3M"``).  Positive deltas are tinted with the palette's
+      ``positive`` slot, negative with ``negative`` (falling back to
+      green / red).
+    * ``delta_text`` *(optional)* — explicit string passthrough; takes
+      precedence over ``delta`` when both are set.
+
+    Tokens consumed:
+
+    * **palette** — title from ``primary`` (fallback ``neutral``); card
+      fill from ``surface`` (fallback ``lt2``); card border from
+      ``muted`` (fallback ``lt1``); value from ``primary`` (fallback
+      ``neutral``); label from ``muted``; delta from ``positive`` /
+      ``success`` (positive) and ``negative`` / ``danger`` (negative).
+    * **typography** — ``heading`` for the title and the KPI value;
+      ``body`` for the label and the delta line.
+    * **shadows** — ``card`` (optional) is applied as a soft shadow on
+      each KPI card.
     """
     slide = _add_blank(prs)
     slide_w, _slide_h = _slide_dims(prs)
@@ -281,12 +319,9 @@ def kpi_slide(
             anchor=MSO_ANCHOR.TOP,
         )
 
-        delta = kpi.get("delta")
-        if delta is not None:
-            d_val = float(delta)
-            sign = "+" if d_val >= 0 else "−"  # proper minus glyph
-            d_text = f"{sign}{abs(d_val):.0%}"
-            d_color = _delta_color(tokens, d_val)
+        d_text, d_sign = _resolve_delta(kpi)
+        if d_text is not None:
+            d_color = _delta_color(tokens, d_sign)
             d_box = slide.shapes.add_textbox(
                 left, Length(top + Inches(1.50)), card_w, Inches(0.35)
             )
@@ -311,7 +346,20 @@ def quote_slide(
     tokens: Optional[DesignTokens] = None,
     transition: Optional[str] = None,
 ) -> "Slide":
-    """Append a centered pull-quote slide with optional attribution."""
+    """Append a centered pull-quote slide with optional attribution.
+
+    *attribution*, when supplied, is rendered with an em-dash prefix
+    (``— Person``).  A leading dash / em-dash / en-dash on the input
+    is stripped so callers can pass either ``"Person"`` or ``"— Person"``
+    without doubling the dash.
+
+    Tokens consumed:
+
+    * **palette** — quote text from ``primary`` (fallback ``neutral``);
+      attribution from ``muted`` (fallback ``neutral``).
+    * **typography** — ``heading`` for the quote (italic by default);
+      ``body`` for the attribution.
+    """
     slide = _add_blank(prs)
     slide_w, slide_h = _slide_dims(prs)
 
@@ -336,9 +384,14 @@ def quote_slide(
         att_box = slide.shapes.add_textbox(
             margin, att_top, Length(slide_w - 2 * margin), Inches(0.6)
         )
+        # Strip any leading dash variants the caller may have already
+        # written (``-``, ``–`` en-dash, ``—`` em-dash) so the recipe's
+        # em-dash isn't doubled — the silent-doubling failure mode is
+        # easy to miss in PR review.
+        att_clean = _strip_attribution_dash(attribution)
         _fill_text_frame(
             att_box.text_frame,
-            f"— {attribution}",
+            f"— {att_clean}",
             token=_typography(tokens, "body", default_size=Pt(16)),
             color=_palette(tokens, ("muted", "neutral")),
             align=PP_ALIGN.CENTER,
@@ -363,6 +416,14 @@ def image_hero_slide(
     The image is added at the slide origin and stretched to the slide's
     full extent.  The title sits in a tinted band across the bottom third
     so it remains readable regardless of the underlying image.
+
+    Tokens consumed:
+
+    * **palette** — band fill from ``primary`` (fallback ``neutral``,
+      then black); title and caption text from ``on_primary`` (falling
+      back to white / near-white).
+    * **typography** — ``heading`` for the title, ``body`` for the
+      caption.
     """
     slide = _add_blank(prs)
     slide_w, slide_h = _slide_dims(prs)
@@ -523,7 +584,69 @@ def _apply_transition(slide: "Slide", transition: Optional[str]) -> None:
     slide.transition.kind = member
 
 
-def _delta_color(tokens: Optional[DesignTokens], delta: float) -> RGBColor:
-    if delta >= 0:
+def _delta_color(tokens: Optional[DesignTokens], sign: int) -> RGBColor:
+    """Return the palette color tinting a delta with ``sign`` (+1 / -1 / 0).
+
+    ``sign == 0`` and ``sign > 0`` both use the positive slot; only
+    strictly-negative deltas use the negative slot.
+    """
+    if sign >= 0:
         return _palette(tokens, ("positive", "success")) or RGBColor(0x00, 0x8A, 0x3C)
     return _palette(tokens, ("negative", "danger")) or RGBColor(0xCC, 0x00, 0x00)
+
+
+# Magnitude at or below which a numeric delta is treated as a fraction
+# (``0.27`` → ``+27%``).  Outside this range we render the raw number
+# with one decimal so callers who already pass percentages — ``14.0`` —
+# don't get them silently multiplied by 100.
+_DELTA_FRACTION_LIMIT = 1.0
+
+
+def _resolve_delta(kpi: Mapping[str, Any]) -> tuple[Optional[str], int]:
+    """Resolve the formatted delta string and sign from a KPI dict.
+
+    Returns ``(text, sign)`` where *text* is ``None`` when no delta was
+    supplied.  The auto-detect rules:
+
+    * ``delta_text="…"`` — explicit string passthrough wins outright.
+    * ``delta="…"`` (string) — used verbatim; sign is inferred from a
+      leading ``-`` / ``−`` if present.
+    * ``delta`` (numeric) with ``|delta| <= 1.0`` — formatted as a
+      signed percentage.
+    * ``delta`` (numeric) with ``|delta| > 1.0`` — formatted as a
+      signed number with one decimal place.
+    """
+    explicit = kpi.get("delta_text")
+    if explicit is not None:
+        s = str(explicit)
+        sign = -1 if s.lstrip().startswith(("-", "−", "–")) else 1
+        return s, sign
+
+    delta = kpi.get("delta")
+    if delta is None:
+        return None, 0
+    if isinstance(delta, str):
+        sign = -1 if delta.lstrip().startswith(("-", "−", "–")) else 1
+        return delta, sign
+
+    d_val = float(delta)
+    sign = -1 if d_val < 0 else 1
+    sign_glyph = "+" if d_val >= 0 else "−"  # proper minus glyph
+    if abs(d_val) <= _DELTA_FRACTION_LIMIT:
+        text = f"{sign_glyph}{abs(d_val):.0%}"
+    else:
+        text = f"{sign_glyph}{abs(d_val):.1f}"
+    return text, sign
+
+
+def _strip_attribution_dash(attribution: str) -> str:
+    """Remove a leading dash variant + whitespace from *attribution*.
+
+    Handles ``-``, ``–`` (en-dash), and ``—`` (em-dash) so callers can
+    pass either ``"Person"`` or ``"— Person"`` without producing
+    ``"— — Person"`` in the rendered slide.
+    """
+    s = attribution.lstrip()
+    while s and s[0] in ("-", "–", "—"):
+        s = s[1:].lstrip()
+    return s

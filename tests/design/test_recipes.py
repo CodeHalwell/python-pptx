@@ -197,6 +197,47 @@ class DescribeKpiSlide:
         assert RGBColor(0x00, 0x85, 0x3E) in colors
         assert RGBColor(0xB0, 0x00, 0x20) in colors
 
+    def it_treats_fraction_deltas_as_percentages(self, prs):
+        slide = kpi_slide(
+            prs,
+            title="m",
+            kpis=[{"label": "L", "value": "v", "delta": 0.27}],
+        )
+        texts = " ".join(_paragraph_texts(slide))
+        assert "+27%" in texts
+
+    def it_renders_large_numeric_deltas_as_raw_values(self, prs):
+        # The pre-fix behaviour multiplied by 100, turning ``14`` into
+        # ``+1400%``.  Auto-detect now formats ``|delta| > 1`` as the raw
+        # number with one decimal so callers can pass percentage points
+        # directly without surprise.
+        slide = kpi_slide(
+            prs,
+            title="m",
+            kpis=[{"label": "L", "value": "v", "delta": 14.0}],
+        )
+        texts = " ".join(_paragraph_texts(slide))
+        assert "+14.0" in texts
+        assert "1400%" not in texts
+
+    def it_uses_delta_text_verbatim(self, prs):
+        slide = kpi_slide(
+            prs,
+            title="m",
+            kpis=[{"label": "L", "value": "v", "delta_text": "+8 pts"}],
+        )
+        texts = " ".join(_paragraph_texts(slide))
+        assert "+8 pts" in texts
+
+    def it_renders_string_delta_verbatim(self, prs):
+        slide = kpi_slide(
+            prs,
+            title="m",
+            kpis=[{"label": "L", "value": "v", "delta": "−$2.3M"}],
+        )
+        texts = " ".join(_paragraph_texts(slide))
+        assert "−$2.3M" in texts
+
     def it_applies_the_card_shadow_token(self, prs, tokens):
         slide = kpi_slide(
             prs,
@@ -226,6 +267,19 @@ class DescribeQuoteSlide:
         slide = quote_slide(prs, quote="Q")
         textboxes = [s for s in slide.shapes if s.has_text_frame]
         assert len(textboxes) == 1
+
+    def it_does_not_double_an_existing_attribution_dash(self, prs):
+        # Callers who already wrote ``"— Ada Lovelace"`` shouldn't end up
+        # with ``"— — Ada Lovelace"`` in the rendered slide.
+        slide = quote_slide(prs, quote="Q", attribution="— Ada Lovelace")
+        texts = _paragraph_texts(slide)
+        assert any(t == "— Ada Lovelace" for t in texts)
+        assert not any("— — Ada Lovelace" in t for t in texts)
+
+    def it_strips_a_leading_hyphen_or_endash(self, prs):
+        slide = quote_slide(prs, quote="Q", attribution="- Ada")
+        texts = _paragraph_texts(slide)
+        assert any(t == "— Ada" for t in texts)
 
 
 class DescribeImageHeroSlide:
