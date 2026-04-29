@@ -1,0 +1,138 @@
+name: release-on-version-bump
+
+# Watches pushes to the default branch (the only path version bumps land
+# on after a merge) and, when ``power_pptx.__version__`` differs from
+# the most recent ``vX.Y.Z`` tag, automatically creates the tag and a
+# GitHub release.  The existing ``publish.yml`` workflow already
+# triggers on ``v*`` tag pushes, so this chain is:
+#
+#     PR merged to master  →  this workflow tags + releases  →  publish.yml builds + uploads to PyPI
+#
+# The workflow is a no-op when ``__version__`` matches an existing tag,
+# so safety-net pushes that don't bump the version don't produce
+# release noise.
+
+on:
+  push:
+    branches:
+      - master
+  # Manual trigger as an escape hatch (e.g. re-running after fixing a
+  # release-notes typo, or releasing a version that landed before this
+  # workflow existed).
+  workflow_dispatch:
+
+# ``contents: write`` is needed to push the new tag and create the
+# release; nothing else is touched.
+permissions:
+  contents: write
+
+# Only one release run at a time per branch — prevents a fast follow-up
+# merge from racing tag creation.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          # ``fetch-depth: 0`` is required so ``git rev-parse`` can see
+          # existing tags — a shallow clone has no tag refs.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read version from src/power_pptx/__init__.py
+        id: version
+        run: |
+          ver=$(python -c "import re; print(re.search(r'__version__\s*=\s*[\"\\']([^\"\\']+)[\"\\']', open('src/power_pptx/__init__.py').read()).group(1))")
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "tag=v$ver" >> "$GITHUB_OUTPUT"
+          echo "Detected version: $ver"
+
+      - name: Check whether tag already exists
+        id: tag-check
+        run: |
+          if git rev-parse -q --verify "refs/tags/${{ steps.version.outputs.tag }}" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag ${{ steps.version.outputs.tag }} already exists — skipping release."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Tag ${{ steps.version.outputs.tag }} does not exist — preparing release."
+          fi
+
+      - name: Extract release notes from HISTORY.rst
+        id: notes
+        if: steps.tag-check.outputs.exists == 'false'
+        run: |
+          # HISTORY.rst sections look like:
+          #
+          #     2.2.0 (2026-04-29)
+          #     ++++++++++++++++++
+          #
+          #     <body>
+          #
+          # so we grep from the matching version header up to the next
+          # version header (or EOF).  Falls back to a generic message
+          # when the version isn't in HISTORY yet so the release still
+          # gets created.
+          python <<'PYEOF' > release-notes.md
+          import os
+          import re
+
+          version = "${{ steps.version.outputs.version }}"
+          try:
+              content = open("HISTORY.rst", encoding="utf-8").read()
+          except FileNotFoundError:
+              print(f"Release {version}")
+              raise SystemExit(0)
+
+          # Match "<version> (<date>)\n+++++…" header, capture everything
+          # until the next "X.Y.Z (...)\n+++…" header or end of file.
+          pattern = re.compile(
+              r"^"
+              + re.escape(version)
+              + r"\s*\([^)]+\)\s*\n\++\s*\n(.*?)(?=^\S+\s*\([^)]+\)\s*\n\++|\Z)",
+              re.DOTALL | re.MULTILINE,
+          )
+          match = pattern.search(content)
+          if match is None:
+              print(f"Release {version}")
+          else:
+              body = match.group(1).strip()
+              print(body if body else f"Release {version}")
+          PYEOF
+
+          echo "::group::release-notes.md"
+          cat release-notes.md
+          echo "::endgroup::"
+
+      - name: Configure git identity
+        if: steps.tag-check.outputs.exists == 'false'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push annotated tag
+        if: steps.tag-check.outputs.exists == 'false'
+        run: |
+          git tag -a "${{ steps.version.outputs.tag }}" \
+            -m "Release ${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+      - name: Create GitHub release
+        if: steps.tag-check.outputs.exists == 'false'
+        env:
+          # GH_TOKEN is the canonical env var name for `gh` ≥ 2.x.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title  "${{ steps.version.outputs.version }}" \
+            --notes-file release-notes.md \
+            --target "${{ github.sha }}"

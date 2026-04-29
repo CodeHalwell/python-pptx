@@ -437,7 +437,13 @@ class Slide(_BaseSlide):
                     continue
                 _write_lint_group(cNvPr, name)
 
-    def lint(self, *, include_effect_bleed: bool = False) -> SlideLintReport:
+    def lint(
+        self,
+        *,
+        include_effect_bleed: bool = False,
+        disable=(),
+        min_severity="info",
+    ) -> SlideLintReport:
         """Inspect this slide for geometric and typographic issues.
 
         Returns a |SlideLintReport| with a list of detected issues (text
@@ -451,6 +457,12 @@ class Slide(_BaseSlide):
         suppress them via ``shape.lint_skip`` without losing real
         geometry warnings.
 
+        *disable* is an iterable of issue ``code`` values to skip
+        entirely — e.g. ``disable=["ShapeCollision"]``.
+
+        *min_severity* drops issues below the named threshold from the
+        report (``"info"`` / ``"warning"`` / ``"error"``).
+
         Example::
 
             report = slide.lint()
@@ -459,7 +471,12 @@ class Slide(_BaseSlide):
         """
         from power_pptx.lint import lint_slide
 
-        return lint_slide(self, include_effect_bleed=include_effect_bleed)
+        return lint_slide(
+            self,
+            include_effect_bleed=include_effect_bleed,
+            disable=disable,
+            min_severity=min_severity,
+        )
 
     @property
     def follow_master_background(self):

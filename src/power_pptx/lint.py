@@ -175,7 +175,14 @@ class ShapeCollision(LintIssue):
 _SEVERITY_BY_KIND: dict[str, LintSeverity] = {
     "incidental": LintSeverity.INFO,
     "partial": LintSeverity.WARNING,
-    "matched": LintSeverity.ERROR,
+    # ``matched`` (near-identical bbox) was originally ERROR, but in
+    # practice the overwhelmingly common cause is intentional visual
+    # layering — a badge drawn over a number, a button drawn over its
+    # label.  Demoting to INFO keeps the signal in the report without
+    # flooding ``has_errors`` and CI pipelines with false positives;
+    # the ``matched`` kind is preserved on the issue so callers who
+    # really want to flag duplicates can filter on it.
+    "matched": LintSeverity.INFO,
 }
 
 
@@ -340,14 +347,19 @@ class SlideLintReport:
         issues: list[LintIssue],
         *,
         include_effect_bleed: bool = False,
+        disable: Sequence[str] = (),
+        min_severity: LintSeverity = LintSeverity.INFO,
     ):
         self._slide = slide
         self._issues = issues
         # Remember the mode the report was generated under so
         # ``auto_fix()``'s post-fix refresh stays consistent — refreshing
         # under default kwargs would otherwise drop bleed-only issues
-        # from a bleed-enabled report.
+        # from a bleed-enabled report or surface issues the caller had
+        # asked to disable.
         self._include_effect_bleed = include_effect_bleed
+        self._disable = tuple(disable)
+        self._min_severity = min_severity
 
     @property
     def issues(self) -> list[LintIssue]:
@@ -379,7 +391,11 @@ class SlideLintReport:
 
         Currently auto-fixable:
 
-        * ``OffSlide``     — nudges the shape so it sits inside the slide bounds.
+        * ``OffSlide``     — clamps the shape on-slide.  Shrinks the
+          width / height first when the shape is larger than the slide
+          (translation alone can't fix that), then nudges position
+          inside the bounds.  Each shape is clamped at most once even
+          when it triggered multiple OffSlide issues (e.g. left + right).
         * ``OffGridDrift`` — snaps the shape's drifted edge onto the dominant
           grid line (Tier 3 of the auto-fix tier list).
 
@@ -394,30 +410,68 @@ class SlideLintReport:
         fixes: list[str] = []
         slide_w, slide_h = _slide_dimensions(self._slide)
 
+        # Cross-issue de-dup: a single shape can pop several OffSlide
+        # issues (left + right, or top + bottom) and the per-issue loop
+        # would otherwise fire twice for the same nudge.  Tracking
+        # already-clamped shapes by id keeps the fix descriptions and
+        # the resulting position consistent.
+        clamped: set[int] = set()
+
         for issue in list(self._issues):
             if isinstance(issue, OffSlide):
                 shape = issue.shapes[0]
+                shape_key = id(shape._element)  # pyright: ignore[reportPrivateUsage]
+                if shape_key in clamped:
+                    continue
                 left, top, width, height = shape.left, shape.top, shape.width, shape.height
                 new_left, new_top = left, top
+                new_width, new_height = width, height
 
-                if left < 0:
+                # First clamp size: a shape larger than the slide can
+                # never be fully on-slide just by translation, so shrink
+                # to fit before deciding where to put it.  This used to
+                # be a silent no-op — auto_fix would translate but never
+                # converge.
+                if slide_w is not None and int(width) > int(slide_w):
+                    new_width = Emu(int(slide_w))
+                if slide_h is not None and int(height) > int(slide_h):
+                    new_height = Emu(int(slide_h))
+
+                if int(left) < 0:
                     new_left = Emu(0)
-                if top < 0:
+                if int(top) < 0:
                     new_top = Emu(0)
-                if slide_w is not None and (left + width) > slide_w:
-                    new_left = Emu(max(0, int(slide_w) - int(width)))
-                if slide_h is not None and (top + height) > slide_h:
-                    new_top = Emu(max(0, int(slide_h) - int(height)))
+                if slide_w is not None and (int(new_left) + int(new_width)) > int(slide_w):
+                    new_left = Emu(max(0, int(slide_w) - int(new_width)))
+                if slide_h is not None and (int(new_top) + int(new_height)) > int(slide_h):
+                    new_top = Emu(max(0, int(slide_h) - int(new_height)))
 
-                if new_left != left or new_top != top:
-                    desc = (
-                        f"Nudged '{shape.name}' from ({left},{top}) to "
-                        f"({new_left},{new_top})."
-                    )
+                changed = (
+                    new_left != left
+                    or new_top != top
+                    or new_width != width
+                    or new_height != height
+                )
+                if changed:
+                    parts = []
+                    if new_left != left or new_top != top:
+                        parts.append(
+                            f"position ({left},{top}) → ({new_left},{new_top})"
+                        )
+                    if new_width != width or new_height != height:
+                        parts.append(
+                            f"size ({width},{height}) → ({new_width},{new_height})"
+                        )
+                    desc = f"Clamped '{shape.name}' on-slide: " + "; ".join(parts) + "."
                     fixes.append(desc)
                     if not dry_run:
                         shape.left = new_left
                         shape.top = new_top
+                        if new_width != width:
+                            shape.width = new_width
+                        if new_height != height:
+                            shape.height = new_height
+                    clamped.add(shape_key)
 
             elif isinstance(issue, OffGridDrift):
                 shape = issue.shapes[0]
@@ -448,10 +502,29 @@ class SlideLintReport:
         # punch list still includes bleed-only issues.
         if not dry_run and fixes:
             self._issues = self._slide.lint(
-                include_effect_bleed=self._include_effect_bleed
+                include_effect_bleed=self._include_effect_bleed,
+                disable=self._disable,
+                min_severity=self._min_severity,
             ).issues
 
         return fixes
+
+    def fingerprints(self) -> list[str]:
+        """Return a stable fingerprint string for each issue.
+
+        Useful for CI baselining: serialise this list into the repo,
+        re-run lint after changes, and diff to see only newly-introduced
+        issues.
+
+        The fingerprint is a 12-char hex digest of
+        ``code | shape names | side / kind / axis``: the *content* of
+        the issue, not its position in the report or any volatile field
+        like the exact intersection area.  Tweaking text inside a shape
+        without moving it does not change the fingerprint; resizing a
+        shape that was already off-slide does not produce a new
+        fingerprint either (still the same OffSlide on the same shape).
+        """
+        return [_issue_fingerprint(i) for i in self._issues]
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +533,32 @@ class SlideLintReport:
 
 _DEFAULT_SLIDE_W = Emu(9144000)  # 10 inches in EMU (standard widescreen)
 _DEFAULT_SLIDE_H = Emu(6858000)  # 7.5 inches in EMU
+
+
+def _issue_fingerprint(issue: LintIssue) -> str:
+    """Return a 12-char hex digest stable across runs for *issue*.
+
+    Encodes only the *content* of the issue: the rule code, the names
+    of the involved shapes, and any classifying field (``side`` for
+    OffSlide, ``axis`` for OffGridDrift, ``kind`` for ShapeCollision).
+    Volatile fields like exact intersection area or absolute position
+    are deliberately excluded so a CI baseline survives small layout
+    nudges that don't fix the underlying issue.
+    """
+    import hashlib
+
+    parts: list[str] = [issue.code]
+    for shape in issue.shapes:
+        try:
+            parts.append(shape.name or "")
+        except Exception:
+            parts.append("?")
+    for attr in ("side", "axis", "kind"):
+        val = getattr(issue, attr, None)
+        if val:
+            parts.append(f"{attr}={val}")
+    digest = hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()
+    return digest[:12]
 
 
 def _slide_dimensions(slide: Slide) -> tuple[Length | None, Length | None]:
@@ -659,13 +758,17 @@ def _find_lint_ext(cNvPr):
 
 
 def _read_lint_group(cNvPr) -> str | None:
-    """Return the ``lint_group`` value stored on *cNvPr*, or ``None``."""
+    """Return the ``lint_group`` value stored on *cNvPr*, or ``None``.
+
+    An *explicitly empty* tag is preserved as ``""`` (the "opted out
+    of any implicit group" sentinel); a *missing* tag returns ``None``.
+    """
     ext = _find_lint_ext(cNvPr)
     if ext is not None:
         node = ext.find(_PP_LINTGROUP)
         if node is not None:
             name = node.get("name")
-            if name:
+            if name is not None:
                 return name
     # Fallback: legacy attribute layout from pre-2.1.1.
     legacy = cNvPr.get(_LEGACY_LINT_GROUP_ATTR)
@@ -725,12 +828,44 @@ def _clear_lint_group(cNvPr) -> None:
 
 
 def _shape_lint_group(shape: BaseShape) -> str | None:
-    """Return the ``lint_group`` tag for *shape*, or ``None`` if untagged."""
+    """Return the ``lint_group`` tag for *shape*, or ``None`` if untagged.
+
+    Resolution order:
+
+    1. An explicit ``lint_group`` value stored on the shape's ``cNvPr``
+       (set via ``shape.lint_group = "card"``).
+    2. A name-prefix convention: a shape named ``"card.bg"`` /
+       ``"card.label"`` / ``"card.title"`` is implicitly grouped under
+       ``"card"``.  This lets a recipe author group several
+       co-positioned shapes by naming them once, rather than tagging
+       each individually after the fact.
+
+    The dotted-prefix convention is only a fallback — an explicit tag
+    always wins, so callers who really want shapes named ``"foo.bar"``
+    not to be grouped can clear the implicit grouping with
+    ``shape.lint_group = ""`` (empty string is treated as a no-group
+    sentinel).
+    """
     try:
         cNvPr = shape._element._nvXxPr.cNvPr  # pyright: ignore[reportPrivateUsage]
     except AttributeError:
+        cNvPr = None
+    if cNvPr is not None:
+        explicit = _read_lint_group(cNvPr)
+        if explicit is not None:
+            # Empty-string explicit tag opts the shape *out* of any
+            # implicit name-prefix group.
+            return explicit or None
+    # Name-prefix fallback.
+    try:
+        name = shape.name
+    except Exception:
         return None
-    return _read_lint_group(cNvPr)
+    if name and "." in name:
+        prefix = name.split(".", 1)[0].strip()
+        if prefix:
+            return prefix
+    return None
 
 
 def _read_lint_skip(cNvPr) -> frozenset[str]:
@@ -1286,7 +1421,11 @@ def _check_master_placeholder_collision(
 
 
 def lint_slide(
-    slide: Slide, *, include_effect_bleed: bool = False
+    slide: Slide,
+    *,
+    include_effect_bleed: bool = False,
+    disable: Sequence[str] = (),
+    min_severity: str | LintSeverity = LintSeverity.INFO,
 ) -> SlideLintReport:
     """Inspect *slide* for geometric and typographic issues.
 
@@ -1297,8 +1436,31 @@ def lint_slide(
     / :class:`ShapeCollisionShadow` so callers can opt them out
     separately via ``shape.lint_skip``.
 
+    *disable* is an iterable of issue ``code`` values to skip entirely
+    — e.g. ``disable=["ShapeCollision", "OffGridDrift"]`` silences both
+    rules deck-wide.  ``ShapeCollisionShadow`` and ``OffSlideShadow``
+    are *not* implied by their non-shadow base codes; pass them
+    explicitly.
+
+    *min_severity* drops issues below the named threshold from the
+    report.  Accepts a :class:`LintSeverity` member or a case-insensitive
+    string (``"info"``, ``"warning"``, ``"error"``).  The default
+    ``"info"`` keeps everything.
+
     Returns a :class:`SlideLintReport` with the detected issues.
     """
+    if isinstance(min_severity, str):
+        try:
+            min_severity_enum = LintSeverity(min_severity.lower())
+        except ValueError:
+            raise ValueError(
+                f"min_severity must be one of "
+                f"{[s.value for s in LintSeverity]}, got {min_severity!r}"
+            )
+    else:
+        min_severity_enum = min_severity
+    disabled = frozenset(disable)
+
     slide_w, slide_h = _slide_dimensions(slide)
     issues: list[LintIssue] = []
     shapes = list(slide.shapes)
@@ -1336,12 +1498,23 @@ def lint_slide(
                 return False
         return True
 
-    issues = [i for i in issues if not _skipped(i)]
+    _order = {LintSeverity.ERROR: 0, LintSeverity.WARNING: 1, LintSeverity.INFO: 2}
+    threshold = _order[min_severity_enum]
+
+    issues = [
+        i for i in issues
+        if not _skipped(i)
+        and i.code not in disabled
+        and _order[i.severity] <= threshold
+    ]
 
     # Sort: errors → warnings → info
-    _order = {LintSeverity.ERROR: 0, LintSeverity.WARNING: 1, LintSeverity.INFO: 2}
     issues.sort(key=lambda x: _order[x.severity])
 
     return SlideLintReport(
-        slide, issues, include_effect_bleed=include_effect_bleed
+        slide,
+        issues,
+        include_effect_bleed=include_effect_bleed,
+        disable=tuple(disabled),
+        min_severity=min_severity_enum,
     )

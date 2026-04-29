@@ -110,11 +110,15 @@ class DescribeRenderSlideThumbnails:
                 render_slide_thumbnails(two_slide_prs, out_dir=tmp_path)
 
     def it_raises_when_soffice_produces_no_pngs(self, tmp_path, two_slide_prs):
+        # ``strategy="png"`` skips the PDF-split fallback so callers can
+        # still assert on the PNG-only failure mode.
         with patch("power_pptx.render.shutil.which", return_value="/usr/bin/soffice"), patch(
             "power_pptx.render._run_soffice", side_effect=_fake_soffice_run(tmp_path, num_slides=0)
         ):
-            with pytest.raises(ThumbnailRendererError, match="no PNG output"):
-                render_slide_thumbnails(two_slide_prs, out_dir=tmp_path)
+            with pytest.raises(ThumbnailRendererError, match="emitted 0 PNG"):
+                render_slide_thumbnails(
+                    two_slide_prs, out_dir=tmp_path, strategy="png"
+                )
 
     def it_passes_the_default_timeout_through(self, tmp_path, two_slide_prs):
         captured = {}
@@ -274,6 +278,86 @@ class DescribePngFiltering:
         # index 1 maps to the genuine second render (slide1.png from the
         # fake runner, which writes slide{0,1}.png).
         assert paths[0].name == "slide1.png"
+
+
+class DescribePdfFallback:
+    """When ``--convert-to png`` only emits one slide, fall back to PDF split."""
+
+    def _fake_pdf_run(self, work_dir, *, exit_code=0, stderr=b""):
+        from subprocess import CompletedProcess
+
+        def _runner(soffice_bin, deck_path, out_dir, timeout):
+            if exit_code == 0:
+                (Path(out_dir) / "_render_input.pdf").write_bytes(b"%PDF-1.4\n")
+            return CompletedProcess(args=[], returncode=exit_code, stdout=b"", stderr=stderr)
+
+        return _runner
+
+    def _fake_pdf_split(self, work_dir, *, num_pages):
+        def _split(pdf_path, out_dir, *, dpi):
+            paths = []
+            prefix = pdf_path.stem + "-page"
+            for i in range(num_pages):
+                p = Path(out_dir) / f"{prefix}-{i + 1}.png"
+                p.write_bytes(b"\x89PNG\r\n\x1a\n%d" % i)
+                paths.append(p)
+            return paths
+
+        return _split
+
+    def it_falls_back_when_png_misses_slides(self, tmp_path, two_slide_prs):
+        # Stock LibreOffice 7+ writes only the first slide via the PNG
+        # filter — simulate that and verify we transparently switch to
+        # the PDF-split path so the caller still gets one PNG per slide.
+        with patch("power_pptx.render.shutil.which", return_value="/usr/bin/soffice"), patch(
+            "power_pptx.render._run_soffice",
+            side_effect=_fake_soffice_run(tmp_path, num_slides=1),
+        ), patch(
+            "power_pptx.render._run_soffice_pdf",
+            side_effect=self._fake_pdf_run(tmp_path),
+        ), patch(
+            "power_pptx.render._pdf_to_pngs",
+            side_effect=self._fake_pdf_split(tmp_path, num_pages=2),
+        ):
+            paths = render_slide_thumbnails(two_slide_prs, out_dir=tmp_path)
+
+        assert len(paths) == 2
+        assert all(p.suffix == ".png" for p in paths)
+
+    def it_uses_pdf_directly_when_strategy_is_pdf(self, tmp_path, two_slide_prs):
+        png_called = False
+
+        def _no_png(*args, **kwargs):
+            nonlocal png_called
+            png_called = True
+            raise AssertionError("PNG path should be skipped when strategy='pdf'")
+
+        with patch("power_pptx.render.shutil.which", return_value="/usr/bin/soffice"), patch(
+            "power_pptx.render._run_soffice", side_effect=_no_png
+        ), patch(
+            "power_pptx.render._run_soffice_pdf",
+            side_effect=self._fake_pdf_run(tmp_path),
+        ), patch(
+            "power_pptx.render._pdf_to_pngs",
+            side_effect=self._fake_pdf_split(tmp_path, num_pages=2),
+        ):
+            paths = render_slide_thumbnails(
+                two_slide_prs, out_dir=tmp_path, strategy="pdf"
+            )
+
+        assert len(paths) == 2
+        assert not png_called
+
+    def it_raises_when_neither_pipeline_produces_pngs(self, tmp_path, two_slide_prs):
+        with patch("power_pptx.render.shutil.which", return_value="/usr/bin/soffice"), patch(
+            "power_pptx.render._run_soffice",
+            side_effect=_fake_soffice_run(tmp_path, num_slides=0),
+        ), patch(
+            "power_pptx.render._run_soffice_pdf",
+            side_effect=self._fake_pdf_run(tmp_path, exit_code=1, stderr=b"boom"),
+        ):
+            with pytest.raises(ThumbnailRendererError, match="status 1"):
+                render_slide_thumbnails(two_slide_prs, out_dir=tmp_path)
 
 
 class DescribeRenderSlideThumbnailCleanup:

@@ -307,8 +307,12 @@ class BaseShape(object):
         if value is None:
             _clear_lint_group(cNvPr)
             return
-        if not isinstance(value, str) or not value:
-            raise ValueError("lint_group must be a non-empty string or None")
+        if not isinstance(value, str):
+            raise ValueError("lint_group must be a string, an empty string, or None")
+        # Empty string is the explicit "no group" sentinel — overrides
+        # any implicit name-prefix group the linter would otherwise
+        # infer from a dotted shape name.  Persist it verbatim rather
+        # than clearing so the override round-trips.
         _write_lint_group(cNvPr, value)
 
     @property

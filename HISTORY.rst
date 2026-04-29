@@ -14,6 +14,145 @@ installs the ``pptx`` import name) is also present in the environment.
 .. _`scanny/python-pptx`: https://github.com/scanny/python-pptx
 
 
+2.3.0 (2026-04-29)
+++++++++++++++++++
+
+Two P0 fixes, six new recipes, a meaningful lint-noise reduction,
+and figure-embedding adapters for Plotly / Matplotlib / HTML.  All
+changes are additive; no existing API was removed.
+
+P0 fixes
+~~~~~~~~
+
+- ``render_slide_thumbnails`` no longer silently drops slides 2..N
+  on stock LibreOffice 7+ (whose ``--convert-to png`` filter only
+  emits the first slide).  When the PNG path under-produces, the
+  renderer transparently falls back to ``--convert-to pdf`` plus a
+  per-page split via ``pdftoppm`` (Poppler) or ``pypdfium2``.  New
+  ``strategy="auto" | "png" | "pdf"`` and ``dpi=`` knobs.
+- ``SlideAnimations.add(kind, preset, shape, **kwargs)`` is now a
+  documented entry point — the class was publicly exported but had
+  no polymorphic ``add()`` method, leaving data-driven callers to
+  build their own dispatcher.
+
+API ergonomics
+~~~~~~~~~~~~~~
+
+- ``MotionPath.svg(slide, shape, "M 0 0 H 100 V 100", viewbox=...)``
+  accepts standard SVG path syntax (M/m L/l H/h V/v C/c Q/q Z/z) and
+  maps coordinates into OOXML's unit-square space.  ``MotionPath.custom``
+  remains the OOXML-syntax escape hatch.
+- ``kpi_slide`` delta auto-detects fraction-vs-raw: ``0.27`` →
+  ``+27%``, ``14.0`` → ``+14.0`` (was silently ``+1400%``).  String
+  ``delta`` and the new ``delta_text`` field pass through verbatim.
+- ``quote_slide`` strips a leading hyphen / en-dash / em-dash from
+  ``attribution`` so callers who already wrote ``"— Person"`` don't
+  get ``"— — Person"``.
+- Every recipe docstring now lists the palette / typography /
+  shadow / radii slots it consumes — no more grepping the source.
+
+Six new recipes
+~~~~~~~~~~~~~~~
+
+- ``section_divider`` — full-bleed cover with an optional eyebrow
+  caption and ``progress=(3, 7)`` row of progress dots.
+- ``chart_slide`` — line / line_markers / bar / column / pie /
+  doughnut / area, with ``chart_palette=`` (named preset, colour
+  list, or token-derived in palette priority order), plus
+  ``legend=`` / ``smooth=`` / ``data_labels=`` toggles.
+- ``table_slide`` — header band + banded rows; ``widths=`` (fractions
+  or absolute Lengths), per-column ``aligns=``, optional
+  ``totals=`` footer row.
+- ``code_slide`` — monospace panel with optional Pygments syntax
+  highlighting.
+- ``timeline_slide`` — horizontal rail with alternating-side
+  date / label pairs and ``done`` marker tinting.
+- ``comparison_slide`` — matched two-column L/R rows.
+- ``figure_slide`` — embed a Plotly Figure, Matplotlib Figure, SVG
+  blob, HTML snippet, or image path; dispatches by type.
+
+Lint signal-to-noise
+~~~~~~~~~~~~~~~~~~~~
+
+- Implicit name-prefix grouping: shapes named ``card.bg`` /
+  ``card.label`` are auto-grouped under ``card`` so the linter
+  treats the pair as one logical unit without per-shape tagging.
+  ``shape.lint_group = ""`` opts a shape out of the implicit group.
+- ``ShapeCollision`` ``kind="matched"`` reclassified ERROR → INFO.
+  Identical bounds are almost always intentional layering (badge
+  + number, button + label); the kind is preserved on the issue
+  for callers who really want to filter on it.
+- ``slide.lint(disable=["ShapeCollision"], min_severity="warning")``
+  filters issues at the lint level rather than after the fact.
+- ``auto_fix()`` now also clamps shape *size* when the shape is
+  larger than the slide — translation alone could never converge,
+  so the previous fixer was a silent no-op for oversize shapes.
+  Multiple OffSlide issues on the same shape coalesce into one fix.
+- ``SlideLintReport.fingerprints()`` returns 12-char content
+  digests suitable for CI baselining — re-runs after layout
+  changes only surface newly-introduced issues.
+
+Design system
+~~~~~~~~~~~~~
+
+- ``DesignTokens.from_preset("modern_light" | "modern_dark" |
+  "corporate_navy" | "vibrant")`` ships ready-to-use token sets so
+  callers don't have to invent a brand from scratch.
+- ``tokens.with_overrides({"palette.primary": "#FF6600",
+  "typography.heading.size": Pt(40)})`` layers dotted-path tweaks
+  onto a base set without forking it.
+- ``kpi_slide`` and ``code_slide`` now apply ``shadows.card`` and
+  ``radii.md`` via a shared ``_apply_card_styling`` helper, so the
+  card-style backdrops actually reflect the design system instead
+  of relying on hard-coded defaults.
+
+compose.from_spec
+~~~~~~~~~~~~~~~~~
+
+- Recipe dispatch: layouts ``kpi`` / ``chart`` / ``table`` / ``code`` /
+  ``timeline`` / ``comparison`` / ``quote`` / ``image_hero`` /
+  ``section_divider`` / ``figure`` / ``title_recipe`` /
+  ``bullets_recipe`` route to the matching ``recipes`` function.
+  Legacy placeholder layouts (``title``, ``bullets``, ``two_column``,
+  …) keep working for branded-template flows.
+- ``tokens`` spec key accepts presets, YAML paths, inline dicts, or
+  ``{"preset": name, "overrides": {...}}``.
+- ``vars`` spec key + ``{{name}}`` interpolation across every
+  string in the spec, including dotted paths into nested mappings.
+  Unknown names raise rather than silently rendering as the
+  literal placeholder.
+- ``compose.from_yaml(path, vars={...})``: direct YAML entry point.
+
+Figure embedding
+~~~~~~~~~~~~~~~~
+
+New ``power_pptx.design.figures`` module with optional-dep adapters:
+
+- ``add_plotly_figure(slide, fig, ...)`` — renders via
+  ``fig.to_image()`` (needs ``plotly + kaleido``); SVG when
+  ``cairosvg`` is present, PNG otherwise.
+- ``add_matplotlib_figure(slide, fig, ...)`` — renders via
+  ``fig.savefig()`` (needs ``matplotlib``); same SVG / PNG split.
+- ``add_svg_figure(slide, svg, ...)`` — wraps the existing
+  ``add_svg_picture`` so every figure kind shares one entry shape.
+- ``add_html_figure(slide, html, ...)`` — proxy for HTML
+  embedding (PowerPoint has no native HTML surface): screenshots
+  the rendered DOM via headless Chromium (needs ``playwright`` +
+  ``playwright install chromium``).
+
+Each adapter imports its dependency lazily and raises
+``FigureBackendUnavailable`` (subclass of ``ImportError``) naming
+the install command when the dep is missing.
+
+Tooling
+~~~~~~~
+
+- New ``release-on-version-bump.yml`` workflow auto-creates a
+  ``vX.Y.Z`` tag and a GitHub release when a merge to ``master``
+  changes ``power_pptx.__version__`` to a value with no matching
+  tag.  Chains into the existing ``publish.yml`` for PyPI upload.
+
+
 2.2.0 (2026-04-29)
 ++++++++++++++++++
 
