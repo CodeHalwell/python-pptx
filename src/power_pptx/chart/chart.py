@@ -187,11 +187,18 @@ class Chart(PartElementProxy):
         if self.has_legend:
             self.legend.font.color.rgb = rgb
 
-        # 3. Chart title — only when one is present.
+        # 3. Chart title — only when both the title element and its
+        # rich-text frame already exist.  Reading
+        # ``chart_title.text_frame`` would otherwise materialise a
+        # ``<c:tx><c:rich>...</c:rich></c:tx>`` subtree on a title that's
+        # currently empty / inheriting, which is a side-effect callers
+        # don't expect from a colour-setting facade.
         if self.has_title:
-            for paragraph in self.chart_title.text_frame.paragraphs:
-                for run in paragraph.runs:
-                    run.font.color.rgb = rgb
+            chart_title = self.chart_title
+            if chart_title.has_text_frame:
+                for paragraph in chart_title.text_frame.paragraphs:
+                    for run in paragraph.runs:
+                        run.font.color.rgb = rgb
 
         # 4. Per-plot data labels — only on plots that already have them.
         for plot in self.plots:

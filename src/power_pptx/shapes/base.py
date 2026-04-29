@@ -200,12 +200,20 @@ class BaseShape(object):
         return ReflectionFormat(self._element.spPr)
 
     @lazyproperty
-    def shadow(self) -> ShadowFormat:
+    def shadow(self) -> ShadowFormat | None:
         """|ShadowFormat| object providing access to shadow for this shape.
 
-        A |ShadowFormat| object is always returned, even when no shadow is
-        explicitly defined on this shape (i.e. it inherits its shadow
-        behavior).
+        For ordinary shapes (autoshapes, pictures, group shapes, connectors)
+        a |ShadowFormat| facade is always returned, even when no shadow is
+        explicitly defined — its individual properties return ``None`` in
+        that case.
+
+        :class:`~power_pptx.shapes.graphfrm.GraphicFrame` returns ``None``
+        instead of a facade: charts and tables expose effects at
+        content-specific locations that the unified |ShadowFormat| API
+        doesn't apply to.  Callers that probe ``shape.shadow`` across every
+        shape on a slide should branch on ``if shape.shadow is None`` to
+        skip GraphicFrames cleanly.
         """
         return ShadowFormat(self._element.spPr)
 
@@ -339,9 +347,28 @@ class BaseShape(object):
                 "lint_skip must be a set/frozenset/list/tuple of issue "
                 f"codes; got {type(value).__name__}"
             )
-        codes = frozenset(str(c) for c in value)
+        # Validate each code: must be a non-empty trimmed string with no
+        # commas (the on-disk form is comma-joined, so a comma in a code
+        # would corrupt the round-trip).  Trim whitespace so callers
+        # don't have to be precious about formatting.
+        codes: set[str] = set()
+        for raw in value:
+            if not isinstance(raw, str):
+                raise TypeError(
+                    "lint_skip codes must be strings; got "
+                    f"{type(raw).__name__}"
+                )
+            code = raw.strip()
+            if not code:
+                raise ValueError("lint_skip codes must be non-empty strings")
+            if "," in code:
+                raise ValueError(
+                    f"lint_skip code {raw!r} contains ',', which is reserved "
+                    "as the on-disk separator"
+                )
+            codes.add(code)
         cNvPr = self._element._nvXxPr.cNvPr  # pyright: ignore[reportPrivateUsage]
-        _write_lint_skip(cNvPr, codes)
+        _write_lint_skip(cNvPr, frozenset(codes))
 
     def delete(self) -> None:
         """Remove this shape from its slide and clean up dependent state.

@@ -519,12 +519,10 @@ def _write_lint_group(cNvPr, value: str) -> None:
     if _LEGACY_LINT_GROUP_ATTR in cNvPr.attrib:
         del cNvPr.attrib[_LEGACY_LINT_GROUP_ATTR]
 
-    extLst = cNvPr.find(_A_EXTLST)
-    if extLst is None:
-        # ``a:extLst`` is the last allowed child of cNvPr per the schema
-        # (after a:hlinkClick / a:hlinkHover); appending is safe because
-        # python-pptx removes any element it doesn't recognise on read.
-        extLst = etree.SubElement(cNvPr, _A_EXTLST)
+    # Go through the oxml descriptor so cNvPr's child ordering
+    # (hlinkClick → hlinkHover → extLst) is respected even when the
+    # other children are present.
+    extLst = cNvPr.get_or_add_extLst()
 
     ext = _find_lint_ext(cNvPr)
     if ext is None:
@@ -538,17 +536,29 @@ def _write_lint_group(cNvPr, value: str) -> None:
 
 
 def _clear_lint_group(cNvPr) -> None:
-    """Remove any lint-group metadata from *cNvPr* (both new and legacy)."""
+    """Remove any lint-group metadata from *cNvPr* (both new and legacy).
+
+    Only the ``<pp:lintGroup>`` node is removed; siblings under the same
+    ``<a:ext>`` (notably ``<pp:lintSkip>``) are preserved.  The
+    enclosing ``<a:ext>`` and ``<a:extLst>`` are removed only when they
+    become empty as a side-effect.
+    """
     if _LEGACY_LINT_GROUP_ATTR in cNvPr.attrib:
         del cNvPr.attrib[_LEGACY_LINT_GROUP_ATTR]
     extLst = cNvPr.find(_A_EXTLST)
     if extLst is None:
         return
-    for ext in list(extLst.findall(_A_EXT)):
-        if ext.get("uri") == _LINT_EXT_URI:
-            extLst.remove(ext)
-    # If we just emptied extLst, drop it too — an empty <a:extLst/> is
-    # legal but pointless and confuses round-trip diff tests.
+    ext = _find_lint_ext(cNvPr)
+    if ext is None:
+        return
+    node = ext.find(_PP_LINTGROUP)
+    if node is not None:
+        ext.remove(node)
+    # Tidy up: drop the wrapper elements only if nothing else lives in
+    # them, so an unrelated ``lint_skip`` setting on the same shape
+    # survives a ``lint_group = None`` clear.
+    if len(ext) == 0:
+        extLst.remove(ext)
     if len(extLst) == 0:
         cNvPr.remove(extLst)
 
@@ -578,9 +588,17 @@ def _write_lint_skip(cNvPr, codes) -> None:
     """Store ``lint_skip = codes`` on *cNvPr* using ``a:extLst/a:ext``."""
     from lxml import etree
 
-    extLst = cNvPr.find(_A_EXTLST)
-    if extLst is None:
-        extLst = etree.SubElement(cNvPr, _A_EXTLST)
+    # Drop any pre-2.1.1 legacy attribute so the new format stays
+    # canonical.  Without this, decks created with 2.1.0 that touch
+    # ``lint_skip`` (and never ``lint_group``) keep emitting the
+    # schema-invalid custom-namespace attribute on cNvPr — the same
+    # XML PowerPoint "repairs and removes" on open.
+    if _LEGACY_LINT_GROUP_ATTR in cNvPr.attrib:
+        del cNvPr.attrib[_LEGACY_LINT_GROUP_ATTR]
+
+    # Go through the oxml descriptor so cNvPr's child ordering is
+    # respected — see ``_write_lint_group``.
+    extLst = cNvPr.get_or_add_extLst()
 
     ext = _find_lint_ext(cNvPr)
     if ext is None:

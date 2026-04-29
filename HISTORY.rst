@@ -35,10 +35,11 @@ Repaired and removed it" prompt on open.
   wrote correctly because they didn't trip the strip-on-default branch.
 
 - Fix the same "Repaired and removed it" prompt on decks that used
-  ``shape.lint_group`` /  The 2.1.0
-  implementation stored the group name as a custom-namespaced *attribute*
-  on each shape's ``p:cNvPr`` element.  ``CT_NonVisualDrawingProps`` has
-  no ``xsd:anyAttribute`` in the OOXML schema, so PowerPoint's strict
+  ``shape.lint_group``, ``slide.lint_group(...)``, or
+  ``slide.design_group(...)``.  The 2.1.0 implementation stored the
+  group name as a custom-namespaced *attribute* on each shape's
+  ``p:cNvPr`` element.  ``CT_NonVisualDrawingProps`` has no
+  ``xsd:anyAttribute`` in the OOXML schema, so PowerPoint's strict
   validator (notably on macOS) flagged every tagged shape as malformed
   and stripped its non-visual properties on open.
 
