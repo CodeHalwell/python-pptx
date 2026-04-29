@@ -82,10 +82,10 @@ class OffSlide(LintIssue):
 
     side: str = ""
 
-    def __init__(self, shape: BaseShape, side: str):
+    def __init__(self, shape: BaseShape, side: str, code: str = "OffSlide"):
         super().__init__(
             severity=LintSeverity.ERROR,
-            code="OffSlide",
+            code=code,
             message=f"Shape '{shape.name}' extends beyond the {side} edge of the slide.",
             shapes=(shape,),
         )
@@ -93,8 +93,36 @@ class OffSlide(LintIssue):
 
 
 @dataclass
+class OffSlideShadow(OffSlide):
+    """Shape's shadow bleed extends beyond the slide boundary.
+
+    Emitted when the raw shape bbox sits inside the slide but
+    inflating by the shadow blur radius pushes it past an edge.  Only
+    fires when ``slide.lint(include_effect_bleed=True)`` is set.  Use
+    ``shape.lint_skip = {"OffSlideShadow"}`` to silence the bleed-only
+    variant without silencing real :class:`OffSlide` issues.
+    """
+
+    def __init__(self, shape: BaseShape, side: str):
+        super().__init__(shape, side, code="OffSlideShadow")
+        # The raw bbox stays on-slide; only the shadow bleed crosses
+        # the edge, so the inherited "Shape extends beyond …" message
+        # would mislead readers.
+        self.message = (
+            f"Shape '{shape.name}': shadow bleed extends beyond the "
+            f"{side} edge of the slide (raw bbox is on-slide)."
+        )
+
+
+@dataclass
 class ShapeCollision(LintIssue):
-    """Two shapes' bounding boxes overlap."""
+    """Two shapes' bounding boxes overlap.
+
+    The detector tiers each collision into a *kind* and a numeric *score*
+    so callers can distinguish layered card-on-panel patterns
+    ("incidental", INFO) from genuine duplicate-rectangle bugs
+    ("matched", ERROR).  See :func:`_check_collisions` for the heuristic.
+    """
 
     intersection_area: int = 0
     intersection_pct: float = 0.0
@@ -103,6 +131,13 @@ class ShapeCollision(LintIssue):
     #: forgot to tag" (one or both ``None``) vs. "genuine layout bug"
     #: (different non-``None`` tags) at a glance in ``report.summary()``.
     groups: tuple[str | None, str | None] = (None, None)
+    #: Likelihood this overlap is a layout bug, in [0.0, 1.0].  Higher is
+    #: more suspicious; ``"incidental"`` collisions tend to score low.
+    score: float = 0.0
+    #: One of ``"incidental"`` (small inside large), ``"partial"``
+    #: (similarly-sized partial overlap), or ``"matched"`` (near-identical
+    #: bbox — almost certainly a duplicate).
+    kind: str = "partial"
 
     def __init__(
         self,
@@ -111,16 +146,21 @@ class ShapeCollision(LintIssue):
         intersection_area: int,
         intersection_pct: float,
         groups: tuple[str | None, str | None] = (None, None),
+        score: float = 0.0,
+        kind: str = "partial",
+        code: str = "ShapeCollision",
     ):
+        severity = _SEVERITY_BY_KIND.get(kind, LintSeverity.WARNING)
         group_suffix = ""
         if groups != (None, None):
             group_suffix = f" [groups: {groups[0]!r} vs {groups[1]!r}]"
         super().__init__(
-            severity=LintSeverity.WARNING,
-            code="ShapeCollision",
+            severity=severity,
+            code=code,
             message=(
                 f"Shapes '{shape_a.name}' and '{shape_b.name}' overlap "
-                f"({intersection_pct:.0%} of the smaller shape's area)."
+                f"({intersection_pct:.0%} of the smaller shape's area) "
+                f"[kind={kind}, score={score:.2f}]"
                 + group_suffix
             ),
             shapes=(shape_a, shape_b),
@@ -128,6 +168,59 @@ class ShapeCollision(LintIssue):
         self.intersection_area = intersection_area
         self.intersection_pct = intersection_pct
         self.groups = groups
+        self.score = score
+        self.kind = kind
+
+
+_SEVERITY_BY_KIND: dict[str, LintSeverity] = {
+    "incidental": LintSeverity.INFO,
+    "partial": LintSeverity.WARNING,
+    "matched": LintSeverity.ERROR,
+}
+
+
+@dataclass
+class ShapeCollisionShadow(ShapeCollision):
+    """Two shapes' shadow bleed regions overlap.
+
+    Emitted when raw bboxes don't overlap but shadow-inflated bboxes
+    do.  Only fires when ``slide.lint(include_effect_bleed=True)`` is
+    set.  Suppress with ``shape.lint_skip = {"ShapeCollisionShadow"}``.
+    """
+
+    def __init__(
+        self,
+        shape_a: BaseShape,
+        shape_b: BaseShape,
+        intersection_area: int,
+        intersection_pct: float,
+        groups: tuple[str | None, str | None] = (None, None),
+        score: float = 0.0,
+        kind: str = "partial",
+    ):
+        super().__init__(
+            shape_a,
+            shape_b,
+            intersection_area=intersection_area,
+            intersection_pct=intersection_pct,
+            groups=groups,
+            score=score,
+            kind=kind,
+            code="ShapeCollisionShadow",
+        )
+        # The raw bboxes don't overlap; only the shadow-inflated ones
+        # do, so the inherited "Shapes … overlap …" wording from
+        # ShapeCollision would mislead readers.
+        group_suffix = ""
+        if groups != (None, None):
+            group_suffix = f" [groups: {groups[0]!r} vs {groups[1]!r}]"
+        self.message = (
+            f"Shapes '{shape_a.name}' and '{shape_b.name}': shadow bleed "
+            f"regions overlap ({intersection_pct:.0%} of the smaller "
+            f"shape's area), though the raw bboxes do not "
+            f"[kind={kind}, score={score:.2f}]"
+            + group_suffix
+        )
 
 
 @dataclass
@@ -241,9 +334,20 @@ class SlideLintReport:
     mutator for the fixable subset.
     """
 
-    def __init__(self, slide: Slide, issues: list[LintIssue]):
+    def __init__(
+        self,
+        slide: Slide,
+        issues: list[LintIssue],
+        *,
+        include_effect_bleed: bool = False,
+    ):
         self._slide = slide
         self._issues = issues
+        # Remember the mode the report was generated under so
+        # ``auto_fix()``'s post-fix refresh stays consistent — refreshing
+        # under default kwargs would otherwise drop bleed-only issues
+        # from a bleed-enabled report.
+        self._include_effect_bleed = include_effect_bleed
 
     @property
     def issues(self) -> list[LintIssue]:
@@ -339,8 +443,13 @@ class SlideLintReport:
         # Refresh ``issues`` so the residual punch list is just
         # ``report.issues`` (no extra ``slide.lint()`` call needed).
         # Skipped on dry_run because nothing changed on the slide.
+        # Re-uses the same ``include_effect_bleed`` mode the original
+        # report was built under, so a bleed-enabled report's residual
+        # punch list still includes bleed-only issues.
         if not dry_run and fixes:
-            self._issues = self._slide.lint().issues
+            self._issues = self._slide.lint(
+                include_effect_bleed=self._include_effect_bleed
+            ).issues
 
         return fixes
 
@@ -377,22 +486,74 @@ def _shape_bbox(shape: BaseShape) -> tuple[int, int, int, int]:
         return 0, 0, 0, 0
 
 
-def _check_off_slide(
-    shape: BaseShape, slide_w: Length, slide_h: Length
-) -> list[LintIssue]:
-    """Return OffSlide issues for *shape* if it exceeds the slide boundary."""
-    issues: list[LintIssue] = []
+def _effective_bbox(shape: BaseShape) -> tuple[int, int, int, int]:
+    """Return the shape bbox inflated by its shadow's blur radius.
+
+    Each side is extended by ``blur_radius / 2``.  Returns the raw bbox
+    when no shadow is set or when ``shape.shadow`` is ``None`` (e.g.
+    :class:`~power_pptx.shapes.graphfrm.GraphicFrame`).
+
+    TODO: project the shadow ``distance`` along its ``direction`` to
+    extend only the side(s) the shadow falls on, instead of inflating
+    every side uniformly.  Glow / soft-edges / reflection follow the
+    same pattern and should be folded in.
+    """
     left, top, right, bottom = _shape_bbox(shape)
+    try:
+        shadow = shape.shadow
+    except Exception:
+        return left, top, right, bottom
+    if shadow is None:
+        return left, top, right, bottom
+    try:
+        blur = shadow.blur_radius
+    except Exception:
+        return left, top, right, bottom
+    if blur is None:
+        return left, top, right, bottom
+    inflate = int(int(blur) / 2)
+    if inflate <= 0:
+        return left, top, right, bottom
+    return left - inflate, top - inflate, right + inflate, bottom + inflate
+
+
+def _check_off_slide(
+    shape: BaseShape,
+    slide_w: Length,
+    slide_h: Length,
+    *,
+    bbox_fn=None,
+) -> list[LintIssue]:
+    """Return OffSlide issues for *shape* if it exceeds the slide boundary.
+
+    *bbox_fn* picks the bbox provider; defaults to :func:`_shape_bbox`.
+    Pass :func:`_effective_bbox` to inflate by shadow blur radius.  When
+    a non-default *bbox_fn* is used, edges that exceed the slide *only*
+    because of effect bleed are emitted as :class:`OffSlideShadow`.
+    """
+    issues: list[LintIssue] = []
+    bbox_fn = bbox_fn or _shape_bbox
+    left, top, right, bottom = bbox_fn(shape)
+    raw = (
+        (left, top, right, bottom)
+        if bbox_fn is _shape_bbox
+        else _shape_bbox(shape)
+    )
     sw, sh = int(slide_w), int(slide_h)
 
+    def _cls(side: str, raw_off: bool) -> LintIssue:
+        if bbox_fn is _shape_bbox or raw_off:
+            return OffSlide(shape, side)
+        return OffSlideShadow(shape, side)
+
     if left < 0:
-        issues.append(OffSlide(shape, "left"))
+        issues.append(_cls("left", raw[0] < 0))
     if top < 0:
-        issues.append(OffSlide(shape, "top"))
+        issues.append(_cls("top", raw[1] < 0))
     if right > sw:
-        issues.append(OffSlide(shape, "right"))
+        issues.append(_cls("right", raw[2] > sw))
     if bottom > sh:
-        issues.append(OffSlide(shape, "bottom"))
+        issues.append(_cls("bottom", raw[3] > sh))
     return issues
 
 
@@ -634,52 +795,155 @@ def _shape_lint_skip(shape: BaseShape) -> frozenset[str]:
     return _read_lint_skip(cNvPr)
 
 
+def _bbox_overlap(
+    bbox_a: tuple[int, int, int, int],
+    bbox_b: tuple[int, int, int, int],
+) -> tuple[int, float]:
+    """Return ``(intersection_area, overlap_pct)`` for two bboxes.
+
+    ``overlap_pct`` is the intersection area as a fraction of the
+    smaller shape's area — the same metric the collision detector
+    thresholds against.  Returns ``(0, 0.0)`` when the bboxes do not
+    intersect.
+    """
+    al, at, ar, ab = bbox_a
+    bl, bt, br, bb = bbox_b
+    ix_l = max(al, bl)
+    ix_t = max(at, bt)
+    ix_r = min(ar, br)
+    ix_b = min(ab, bb)
+    if ix_r <= ix_l or ix_b <= ix_t:
+        return 0, 0.0
+    area = (ix_r - ix_l) * (ix_b - ix_t)
+    area_a = max(1, (ar - al) * (ab - at))
+    area_b = max(1, (br - bl) * (bb - bt))
+    return area, area / min(area_a, area_b)
+
+
+def _classify_collision(
+    bbox_a: tuple[int, int, int, int],
+    bbox_b: tuple[int, int, int, int],
+    overlap_pct: float,
+) -> tuple[str, float]:
+    """Score and tier a collision into ``(kind, score)``.
+
+    ``score`` is the likelihood the overlap is a layout bug, in
+    ``[0.0, 1.0]``.  Higher = more suspicious.  ``kind`` is one of
+    ``"incidental"``, ``"partial"``, ``"matched"``.
+
+    Heuristic intent:
+
+    * **Containment** (the smaller shape is fully inside the larger)
+      pulls the score *down* — this is the card-on-panel pattern.
+      ``overlap_pct`` doubles as the containment ratio: it's the
+      intersection area divided by the smaller shape's area, which
+      reaches 1.0 exactly when the smaller shape is fully contained.
+    * **Size ratio** (smaller_area / larger_area) close to 1.0 pulls
+      the score *up* — same-size pairs are more likely duplicates.
+    * **Overlap percentage** of the smaller shape pulls the score *up*.
+    """
+    al, at, ar, ab = bbox_a
+    bl, bt, br, bb = bbox_b
+    area_a = max(1, (ar - al) * (ab - at))
+    area_b = max(1, (br - bl) * (bb - bt))
+    size_ratio = min(area_a, area_b) / max(area_a, area_b)  # in (0, 1]
+
+    # Tolerance in EMU for "near-identical bbox" (5% on each axis).
+    tol_w = max(1, int(0.05 * max(ar - al, br - bl)))
+    tol_h = max(1, int(0.05 * max(ab - at, bb - bt)))
+    bboxes_match = (
+        abs(al - bl) <= tol_w
+        and abs(at - bt) <= tol_h
+        and abs(ar - br) <= tol_w
+        and abs(ab - bb) <= tol_h
+    )
+
+    # "matched": near-identical bbox AND heavy overlap.  Almost
+    # certainly a duplicate / copy-paste bug.
+    if bboxes_match and overlap_pct > 0.80:
+        return "matched", min(1.0, 0.85 + 0.15 * overlap_pct)
+
+    # "incidental": one shape fully contains the other and they aren't
+    # the same size — the card-on-panel pattern.
+    fully_contained = (
+        _bbox_contains(bbox_a, bbox_b) or _bbox_contains(bbox_b, bbox_a)
+    )
+    if fully_contained and size_ratio < 0.9:
+        # Full containment + small size_ratio → very low score.
+        score = 0.5 * size_ratio + 0.1 * (1.0 - overlap_pct)
+        return "incidental", max(0.0, min(1.0, score))
+
+    # "partial": neither contains the other, scored on size_ratio and
+    # overlap_pct.  Two similarly-sized shapes overlapping a lot is
+    # suspicious; two very-different sizes barely touching is not.
+    score = 0.4 * size_ratio + 0.6 * min(1.0, overlap_pct)
+    return "partial", max(0.0, min(1.0, score))
+
+
 def _check_collisions(
     shapes: Sequence[BaseShape],
+    *,
+    bbox_fn=None,
 ) -> list[LintIssue]:
     """Return ShapeCollision issues for pairs of overlapping shapes.
 
     Shapes sharing a non-empty ``lint_group`` are treated as intentionally
-    layered and never produce a collision warning. Shapes with no group, or
-    shapes in different groups, continue to warn on overlap.
+    layered and never produce a collision warning — group suppression
+    runs *before* scoring, since a tagged group is "intentional" by
+    definition.  Shapes with no group, or shapes in different groups,
+    continue through to scoring + classification.
+
+    *bbox_fn* picks the bbox provider; defaults to :func:`_shape_bbox`.
+    Pass :func:`_effective_bbox` to inflate by shadow blur radius.  When
+    a non-default *bbox_fn* is supplied, collisions that would *not*
+    fire on the raw bbox are emitted as the ``ShapeCollisionShadow``
+    subclass so callers can opt them out separately via ``lint_skip``.
     """
     issues: list[LintIssue] = []
-    bboxes = [_shape_bbox(s) for s in shapes]
+    bbox_fn = bbox_fn or _shape_bbox
+    bboxes = [bbox_fn(s) for s in shapes]
+    # Only compute raw bboxes when bleed is enabled — otherwise the
+    # raw and effective bboxes are the same and there's nothing to
+    # compare against.
+    using_bleed = bbox_fn is not _shape_bbox
+    raw_bboxes = [_shape_bbox(s) for s in shapes] if using_bleed else None
     groups = [_shape_lint_group(s) for s in shapes]
 
     for i in range(len(shapes)):
         for j in range(i + 1, len(shapes)):
-            # Suppress collisions inside a designer-tagged group.
+            # Suppress collisions inside a designer-tagged group *before*
+            # scoring — a tagged group is "intentional" by definition.
             gi, gj = groups[i], groups[j]
             if gi is not None and gi == gj:
                 continue
 
-            al, at, ar, ab = bboxes[i]
-            bl, bt, br, bb = bboxes[j]
-
-            ix_l = max(al, bl)
-            ix_t = max(at, bt)
-            ix_r = min(ar, br)
-            ix_b = min(ab, bb)
-
-            if ix_r <= ix_l or ix_b <= ix_t:
+            area, pct = _bbox_overlap(bboxes[i], bboxes[j])
+            if pct < _COLLISION_THRESHOLD:
                 continue
 
-            area = (ix_r - ix_l) * (ix_b - ix_t)
-            area_a = max(1, (ar - al) * (ab - at))
-            area_b = max(1, (br - bl) * (bb - bt))
-            pct = area / min(area_a, area_b)
+            kind, score = _classify_collision(bboxes[i], bboxes[j], pct)
 
-            if pct >= _COLLISION_THRESHOLD:
-                issues.append(
-                    ShapeCollision(
-                        shapes[i],
-                        shapes[j],
-                        intersection_area=area,
-                        intersection_pct=pct,
-                        groups=(gi, gj),
-                    )
+            # Decide whether the inflated bbox is what triggered the
+            # collision: if the raw bboxes don't intersect by at least
+            # the threshold, this is bleed-only.
+            cls: type[ShapeCollision] = ShapeCollision
+            if using_bleed:
+                assert raw_bboxes is not None  # narrows type for mypy
+                _, raw_pct = _bbox_overlap(raw_bboxes[i], raw_bboxes[j])
+                if raw_pct < _COLLISION_THRESHOLD:
+                    cls = ShapeCollisionShadow
+
+            issues.append(
+                cls(
+                    shapes[i],
+                    shapes[j],
+                    intersection_area=area,
+                    intersection_pct=pct,
+                    groups=(gi, gj),
+                    score=score,
+                    kind=kind,
                 )
+            )
 
     return issues
 
@@ -1021,23 +1285,35 @@ def _check_master_placeholder_collision(
     return issues
 
 
-def lint_slide(slide: Slide) -> SlideLintReport:
+def lint_slide(
+    slide: Slide, *, include_effect_bleed: bool = False
+) -> SlideLintReport:
     """Inspect *slide* for geometric and typographic issues.
+
+    *include_effect_bleed* is opt-in (default ``False``): when ``True``
+    the :class:`OffSlide` and :class:`ShapeCollision` detectors widen
+    each shape's bbox by its shadow blur radius before checking
+    geometry.  Bleed-only triggers come back as :class:`OffSlideShadow`
+    / :class:`ShapeCollisionShadow` so callers can opt them out
+    separately via ``shape.lint_skip``.
 
     Returns a :class:`SlideLintReport` with the detected issues.
     """
     slide_w, slide_h = _slide_dimensions(slide)
     issues: list[LintIssue] = []
     shapes = list(slide.shapes)
+    bbox_fn = _effective_bbox if include_effect_bleed else _shape_bbox
 
     for shape in shapes:
         if slide_w is not None and slide_h is not None:
-            issues.extend(_check_off_slide(shape, slide_w, slide_h))
+            issues.extend(
+                _check_off_slide(shape, slide_w, slide_h, bbox_fn=bbox_fn)
+            )
         issues.extend(_check_text_overflow(shape))
         issues.extend(_check_min_font_size(shape))
         issues.extend(_check_low_contrast(shape, slide))
 
-    issues.extend(_check_collisions(shapes))
+    issues.extend(_check_collisions(shapes, bbox_fn=bbox_fn))
     issues.extend(_check_off_grid_drift(shapes))
     issues.extend(_check_z_order_anomalies(shapes))
     issues.extend(_check_master_placeholder_collision(slide, shapes))
@@ -1066,4 +1342,6 @@ def lint_slide(slide: Slide) -> SlideLintReport:
     _order = {LintSeverity.ERROR: 0, LintSeverity.WARNING: 1, LintSeverity.INFO: 2}
     issues.sort(key=lambda x: _order[x.severity])
 
-    return SlideLintReport(slide, issues)
+    return SlideLintReport(
+        slide, issues, include_effect_bleed=include_effect_bleed
+    )

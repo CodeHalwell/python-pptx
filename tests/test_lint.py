@@ -9,11 +9,15 @@ import pytest
 from power_pptx import Presentation
 from power_pptx.dml.color import RGBColor
 from power_pptx.lint import (
+    LintSeverity,
     LowContrast,
     MasterPlaceholderCollision,
     MinFontSize,
     OffGridDrift,
+    OffSlide,
+    OffSlideShadow,
     ShapeCollision,
+    ShapeCollisionShadow,
     ZOrderAnomaly,
     _LEGACY_LINT_GROUP_ATTR,
     _LINT_EXT_URI,
@@ -21,7 +25,7 @@ from power_pptx.lint import (
     _find_lint_ext,
     _write_lint_group,
 )
-from power_pptx.util import Inches, Pt
+from power_pptx.util import Emu, Inches, Pt
 
 
 def _new_blank_slide():
@@ -571,3 +575,212 @@ class DescribeReportSummary:
         _, slide = _new_blank_slide()
         slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(1), Inches(1))
         assert slide.lint().summary() == "No issues found."
+
+
+class DescribeShapeCollisionScoring:
+    """Structural-vs-incidental scoring on ``ShapeCollision``."""
+
+    def it_classifies_a_card_on_panel_as_incidental_INFO(self):
+        # Big panel, small card fully inside it.
+        _, slide = _new_blank_slide()
+        slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(5), Inches(5))
+        slide.shapes.add_shape(1, Inches(2), Inches(2), Inches(1), Inches(1))
+        cs = _collisions(slide)
+        assert len(cs) == 1
+        assert cs[0].kind == "incidental"
+        assert cs[0].severity == LintSeverity.INFO
+        assert 0.0 <= cs[0].score <= 0.5
+
+    def it_classifies_two_partially_overlapping_peers_as_partial_WARNING(self):
+        # Two same-size rectangles partially overlapping, neither contains
+        # the other.
+        _, slide = _new_blank_slide()
+        slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        slide.shapes.add_shape(1, Inches(1.5), Inches(1.5), Inches(2), Inches(2))
+        cs = _collisions(slide)
+        assert len(cs) == 1
+        assert cs[0].kind == "partial"
+        assert cs[0].severity == LintSeverity.WARNING
+
+    def it_classifies_near_identical_bboxes_as_matched_ERROR(self):
+        # Two rectangles at the same place — duplicate / copy-paste bug.
+        _, slide = _new_blank_slide()
+        slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        cs = _collisions(slide)
+        assert len(cs) == 1
+        assert cs[0].kind == "matched"
+        assert cs[0].severity == LintSeverity.ERROR
+        assert cs[0].score >= 0.85
+
+    def it_runs_group_suppression_before_scoring(self):
+        # A grouped pair must never be scored — the ``score`` /
+        # ``kind`` fields are meaningless for an intentional layered
+        # group, so the issue is dropped entirely.
+        _, slide = _new_blank_slide()
+        a, b = _add_overlapping_rects(slide, 2)
+        slide.lint_group("kpi-card-1", a, b)
+        assert _collisions(slide) == []
+
+    def it_includes_kind_and_score_in_summary_output(self):
+        _, slide = _new_blank_slide()
+        slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        slide.shapes.add_shape(1, Inches(1.5), Inches(1.5), Inches(2), Inches(2))
+        summary = slide.lint().summary()
+        assert "kind=" in summary
+        assert "score=" in summary
+
+
+class DescribeEffectBleedGeometry:
+    """Opt-in effect-bleed-aware geometry on OffSlide / ShapeCollision."""
+
+    def _slide_dims(self, slide):
+        return (
+            slide.part.package.presentation_part.presentation.slide_width,
+            slide.part.package.presentation_part.presentation.slide_height,
+        )
+
+    def it_does_not_fire_off_slide_when_bleed_disabled(self):
+        # Shape sits flush against the right edge; shadow blur extends
+        # past the slide.  Without the flag the linter only sees the
+        # raw bbox and stays quiet.
+        _, slide = _new_blank_slide()
+        slide_w, _slide_h = self._slide_dims(slide)
+        s = slide.shapes.add_shape(
+            1, slide_w - Inches(2), Inches(1), Inches(2), Inches(2)
+        )
+        s.shadow.blur_radius = Emu(914400)  # 1" blur
+        off = [i for i in slide.lint().issues if isinstance(i, OffSlide)]
+        assert off == []
+
+    def it_fires_OffSlideShadow_when_bleed_enabled(self):
+        _, slide = _new_blank_slide()
+        slide_w, _slide_h = self._slide_dims(slide)
+        s = slide.shapes.add_shape(
+            1, slide_w - Inches(2), Inches(1), Inches(2), Inches(2)
+        )
+        s.shadow.blur_radius = Emu(914400)
+        report = slide.lint(include_effect_bleed=True)
+        bleed = [i for i in report.issues if isinstance(i, OffSlideShadow)]
+        assert len(bleed) >= 1
+        assert any(i.code == "OffSlideShadow" for i in bleed)
+
+    def it_does_not_fire_collision_when_bleed_disabled(self):
+        _, slide = _new_blank_slide()
+        a = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        # b is well clear of a's raw bbox.
+        b = slide.shapes.add_shape(1, Inches(4), Inches(1), Inches(2), Inches(2))
+        a.shadow.blur_radius = Emu(914400 * 4)  # 4" blur — pushes into b
+        b.shadow.blur_radius = Emu(914400 * 4)
+        # Default lint sees no collision.
+        assert _collisions(slide) == []
+
+    def it_fires_ShapeCollisionShadow_when_bleed_enabled(self):
+        _, slide = _new_blank_slide()
+        a = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        b = slide.shapes.add_shape(1, Inches(4), Inches(1), Inches(2), Inches(2))
+        a.shadow.blur_radius = Emu(914400 * 4)
+        b.shadow.blur_radius = Emu(914400 * 4)
+        report = slide.lint(include_effect_bleed=True)
+        bleed = [i for i in report.issues if isinstance(i, ShapeCollisionShadow)]
+        assert len(bleed) == 1
+        assert bleed[0].code == "ShapeCollisionShadow"
+
+    def it_treats_GraphicFrame_as_no_bleed_regardless_of_flag(self):
+        # Charts / tables (GraphicFrame) expose ``shape.shadow == None``
+        # since 2.1.1 — the bleed helper must handle that gracefully
+        # and fall back to the raw bbox.
+        from power_pptx.shapes.base import BaseShape
+        from power_pptx.lint import _effective_bbox, _shape_bbox
+
+        class _FakeGraphicFrame:
+            name = "tbl"
+            left = Emu(914400)
+            top = Emu(914400)
+            width = Emu(914400)
+            height = Emu(914400)
+            shadow = None
+
+        fake = _FakeGraphicFrame()
+        assert _effective_bbox(fake) == _shape_bbox(fake)  # type: ignore[arg-type]
+        # And it must not blow up when threaded through lint().
+        _ = BaseShape  # silence unused-import lint
+
+    def it_uses_a_shadow_specific_message_for_OffSlideShadow(self):
+        # The bleed-only variant must not reuse OffSlide's "extends
+        # beyond the … edge" wording, since the raw bbox is on-slide.
+        _, slide = _new_blank_slide()
+        slide_w, _slide_h = self._slide_dims(slide)
+        s = slide.shapes.add_shape(
+            1, slide_w - Inches(2), Inches(1), Inches(2), Inches(2)
+        )
+        s.shadow.blur_radius = Emu(914400)
+        report = slide.lint(include_effect_bleed=True)
+        bleed = [i for i in report.issues if isinstance(i, OffSlideShadow)]
+        assert bleed, "expected at least one OffSlideShadow"
+        msg = bleed[0].message
+        assert "shadow bleed" in msg
+        assert "raw bbox is on-slide" in msg
+
+    def it_uses_a_shadow_specific_message_for_ShapeCollisionShadow(self):
+        # Same — the raw bboxes don't overlap, only the inflated ones
+        # do, so "Shapes … overlap …" would mislead.
+        _, slide = _new_blank_slide()
+        a = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        b = slide.shapes.add_shape(1, Inches(4), Inches(1), Inches(2), Inches(2))
+        a.shadow.blur_radius = Emu(914400 * 4)
+        b.shadow.blur_radius = Emu(914400 * 4)
+        report = slide.lint(include_effect_bleed=True)
+        bleed = [i for i in report.issues if isinstance(i, ShapeCollisionShadow)]
+        assert bleed, "expected at least one ShapeCollisionShadow"
+        msg = bleed[0].message
+        assert "shadow bleed" in msg
+        assert "raw bboxes do not" in msg
+
+    def it_preserves_include_effect_bleed_through_auto_fix_refresh(self):
+        # Regression: ``auto_fix()`` refreshes ``report.issues`` by
+        # calling ``slide.lint()``.  If the original report was built
+        # under ``include_effect_bleed=True`` the refresh must use the
+        # same mode — otherwise bleed-only issues silently disappear
+        # from the residual punch list as soon as any other fix runs.
+        _, slide = _new_blank_slide()
+        slide_w, _slide_h = self._slide_dims(slide)
+        # Bleed-only OffSlide on shape A.
+        a = slide.shapes.add_shape(
+            1, slide_w - Inches(2), Inches(0.5), Inches(2), Inches(2)
+        )
+        a.shadow.blur_radius = Emu(914400)
+        # Off-grid drift offender (auto-fixable) so a fix actually fires
+        # and triggers the refresh.
+        for i in range(4):
+            slide.shapes.add_shape(
+                1, Inches(6), Inches(0.5 + i * 1.0), Inches(1), Inches(0.5)
+            )
+        slide.shapes.add_shape(
+            1, Inches(6) + 30000, Inches(5), Inches(1), Inches(0.5)
+        )
+
+        report = slide.lint(include_effect_bleed=True)
+        assert any(isinstance(i, OffSlideShadow) for i in report.issues)
+        report.auto_fix()  # snaps the drift offender; triggers refresh
+        # Bleed-only OffSlideShadow must survive the refresh.
+        assert any(isinstance(i, OffSlideShadow) for i in report.issues)
+
+    def it_silences_OffSlideShadow_via_lint_skip_without_silencing_real_OffSlide(self):
+        _, slide = _new_blank_slide()
+        slide_w, slide_h = self._slide_dims(slide)
+        # Shape A: bleed-only OffSlide (raw bbox inside, shadow past edge).
+        a = slide.shapes.add_shape(
+            1, slide_w - Inches(2), Inches(1), Inches(2), Inches(2)
+        )
+        a.shadow.blur_radius = Emu(914400)
+        # Shape B: real OffSlide (raw bbox already past the bottom edge).
+        b = slide.shapes.add_shape(
+            1, Inches(1), slide_h - Inches(1), Inches(2), Inches(2)
+        )
+        # Skip the bleed-only variant on the bleed shape.
+        a.lint_skip = {"OffSlideShadow"}
+        report = slide.lint(include_effect_bleed=True)
+        codes = {i.code for i in report.issues}
+        assert "OffSlide" in codes  # b's real off-slide still fires
+        assert "OffSlideShadow" not in codes  # a's bleed silenced
