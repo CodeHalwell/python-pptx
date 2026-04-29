@@ -14,7 +14,10 @@ from power_pptx.lint import (
     MasterPlaceholderCollision,
     MinFontSize,
     OffGridDrift,
+    OffSlide,
+    OffSlideShadow,
     ShapeCollision,
+    ShapeCollisionShadow,
     ZOrderAnomaly,
     _LEGACY_LINT_GROUP_ATTR,
     _LINT_EXT_URI,
@@ -22,7 +25,7 @@ from power_pptx.lint import (
     _find_lint_ext,
     _write_lint_group,
 )
-from power_pptx.util import Inches, Pt
+from power_pptx.util import Emu, Inches, Pt
 
 
 def _new_blank_slide():
@@ -626,3 +629,98 @@ class DescribeShapeCollisionScoring:
         summary = slide.lint().summary()
         assert "kind=" in summary
         assert "score=" in summary
+
+
+class DescribeEffectBleedGeometry:
+    """Opt-in effect-bleed-aware geometry on OffSlide / ShapeCollision."""
+
+    def _slide_dims(self, slide):
+        return (
+            slide.part.package.presentation_part.presentation.slide_width,
+            slide.part.package.presentation_part.presentation.slide_height,
+        )
+
+    def it_does_not_fire_off_slide_when_bleed_disabled(self):
+        # Shape sits flush against the right edge; shadow blur extends
+        # past the slide.  Without the flag the linter only sees the
+        # raw bbox and stays quiet.
+        _, slide = _new_blank_slide()
+        slide_w, _slide_h = self._slide_dims(slide)
+        s = slide.shapes.add_shape(
+            1, slide_w - Inches(2), Inches(1), Inches(2), Inches(2)
+        )
+        s.shadow.blur_radius = Emu(914400)  # 1" blur
+        off = [i for i in slide.lint().issues if isinstance(i, OffSlide)]
+        assert off == []
+
+    def it_fires_OffSlideShadow_when_bleed_enabled(self):
+        _, slide = _new_blank_slide()
+        slide_w, _slide_h = self._slide_dims(slide)
+        s = slide.shapes.add_shape(
+            1, slide_w - Inches(2), Inches(1), Inches(2), Inches(2)
+        )
+        s.shadow.blur_radius = Emu(914400)
+        report = slide.lint(include_effect_bleed=True)
+        bleed = [i for i in report.issues if isinstance(i, OffSlideShadow)]
+        assert len(bleed) >= 1
+        assert any(i.code == "OffSlideShadow" for i in bleed)
+
+    def it_does_not_fire_collision_when_bleed_disabled(self):
+        _, slide = _new_blank_slide()
+        a = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        # b is well clear of a's raw bbox.
+        b = slide.shapes.add_shape(1, Inches(4), Inches(1), Inches(2), Inches(2))
+        a.shadow.blur_radius = Emu(914400 * 4)  # 4" blur — pushes into b
+        b.shadow.blur_radius = Emu(914400 * 4)
+        # Default lint sees no collision.
+        assert _collisions(slide) == []
+
+    def it_fires_ShapeCollisionShadow_when_bleed_enabled(self):
+        _, slide = _new_blank_slide()
+        a = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        b = slide.shapes.add_shape(1, Inches(4), Inches(1), Inches(2), Inches(2))
+        a.shadow.blur_radius = Emu(914400 * 4)
+        b.shadow.blur_radius = Emu(914400 * 4)
+        report = slide.lint(include_effect_bleed=True)
+        bleed = [i for i in report.issues if isinstance(i, ShapeCollisionShadow)]
+        assert len(bleed) == 1
+        assert bleed[0].code == "ShapeCollisionShadow"
+
+    def it_treats_GraphicFrame_as_no_bleed_regardless_of_flag(self):
+        # Charts / tables (GraphicFrame) expose ``shape.shadow == None``
+        # since 2.1.1 — the bleed helper must handle that gracefully
+        # and fall back to the raw bbox.
+        from power_pptx.shapes.base import BaseShape
+        from power_pptx.lint import _effective_bbox, _shape_bbox
+
+        class _FakeGraphicFrame:
+            name = "tbl"
+            left = Emu(914400)
+            top = Emu(914400)
+            width = Emu(914400)
+            height = Emu(914400)
+            shadow = None
+
+        fake = _FakeGraphicFrame()
+        assert _effective_bbox(fake) == _shape_bbox(fake)  # type: ignore[arg-type]
+        # And it must not blow up when threaded through lint().
+        _ = BaseShape  # silence unused-import lint
+
+    def it_silences_OffSlideShadow_via_lint_skip_without_silencing_real_OffSlide(self):
+        _, slide = _new_blank_slide()
+        slide_w, slide_h = self._slide_dims(slide)
+        # Shape A: bleed-only OffSlide (raw bbox inside, shadow past edge).
+        a = slide.shapes.add_shape(
+            1, slide_w - Inches(2), Inches(1), Inches(2), Inches(2)
+        )
+        a.shadow.blur_radius = Emu(914400)
+        # Shape B: real OffSlide (raw bbox already past the bottom edge).
+        b = slide.shapes.add_shape(
+            1, Inches(1), slide_h - Inches(1), Inches(2), Inches(2)
+        )
+        # Skip the bleed-only variant on the bleed shape.
+        a.lint_skip = {"OffSlideShadow"}
+        report = slide.lint(include_effect_bleed=True)
+        codes = {i.code for i in report.issues}
+        assert "OffSlide" in codes  # b's real off-slide still fires
+        assert "OffSlideShadow" not in codes  # a's bleed silenced

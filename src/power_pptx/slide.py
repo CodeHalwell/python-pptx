@@ -437,12 +437,19 @@ class Slide(_BaseSlide):
                     continue
                 _write_lint_group(cNvPr, name)
 
-    def lint(self) -> SlideLintReport:
+    def lint(self, *, include_effect_bleed: bool = False) -> SlideLintReport:
         """Inspect this slide for geometric and typographic issues.
 
         Returns a |SlideLintReport| with a list of detected issues (text
         overflow, shapes off-slide, shape collisions).  The report is
         generated fresh on each call.
+
+        *include_effect_bleed* (opt-in, default |False|) widens each
+        shape's bbox by its shadow blur radius before the OffSlide and
+        ShapeCollision checks run.  Bleed-only issues are emitted as
+        ``OffSlideShadow`` / ``ShapeCollisionShadow`` so callers can
+        suppress them via ``shape.lint_skip`` without losing real
+        geometry warnings.
 
         Example::
 
@@ -452,7 +459,7 @@ class Slide(_BaseSlide):
         """
         from power_pptx.lint import lint_slide
 
-        return lint_slide(self)
+        return lint_slide(self, include_effect_bleed=include_effect_bleed)
 
     @property
     def follow_master_background(self):
