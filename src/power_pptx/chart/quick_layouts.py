@@ -136,7 +136,7 @@ def layout_names() -> tuple[str, ...]:
     return tuple(QUICK_LAYOUTS.keys())
 
 
-def apply_quick_layout(chart, layout) -> None:
+def apply_quick_layout(chart, layout, **overrides) -> None:
     """Apply a quick-layout preset to `chart`.
 
     `layout` is either the name of a built-in preset (see
@@ -144,12 +144,50 @@ def apply_quick_layout(chart, layout) -> None:
     module docstring.  Missing spec keys are left untouched on the chart,
     so layouts can be composed.  Charts that lack a category or value
     axis silently skip the corresponding axis keys.
+
+    Any keyword arguments are merged on top of the resolved layout — they
+    override the preset where they collide.  This is the pattern for
+    "use this preset, but with this title"::
+
+        apply_quick_layout(chart, "title_legend_right", title_text="Q4 ARR")
+        apply_quick_layout(
+            chart, "title_axes_legend_bottom",
+            value_axis_title_text="Revenue (£m)",
+            has_major_gridlines=False,
+        )
+
+    Unknown override keys raise :class:`TypeError`.
     """
     spec = _resolve_layout(layout)
+    if overrides:
+        unknown = set(overrides) - _VALID_SPEC_KEYS
+        if unknown:
+            raise TypeError(
+                "unknown quick-layout override(s): %s; valid keys: %s"
+                % (sorted(unknown), sorted(_VALID_SPEC_KEYS))
+            )
+        spec.update(overrides)
     _apply_title(chart, spec)
     _apply_legend(chart, spec)
     _apply_category_axis(chart, spec)
     _apply_value_axis(chart, spec)
+
+
+_VALID_SPEC_KEYS = frozenset(
+    {
+        "has_title",
+        "title_text",
+        "has_legend",
+        "legend_position",
+        "legend_in_layout",
+        "has_category_axis_title",
+        "category_axis_title_text",
+        "has_value_axis_title",
+        "value_axis_title_text",
+        "has_major_gridlines",
+        "has_minor_gridlines",
+    }
+)
 
 
 def _resolve_layout(layout) -> dict[str, Any]:

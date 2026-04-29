@@ -1,4 +1,4 @@
-"""High-level theme API for python-pptx.
+"""High-level theme API for power-pptx.
 
 Provides read/write access to a presentation's color palette and font
 scheme as stored in the theme part (``ppt/theme/theme1.xml``).
@@ -72,7 +72,13 @@ class Theme:
     def name(self, value: str) -> None:
         self._theme_elm.set("name", value)
 
-    def apply(self, other: Theme) -> None:
+    def apply(
+        self,
+        other: Theme,
+        *,
+        rebind_shape_colors: bool = False,
+        presentation=None,
+    ) -> int:
         """Copy *other*'s color palette and font pair into this theme.
 
         Iterates every :class:`MSO_THEME_COLOR` slot present on *other*
@@ -80,15 +86,40 @@ class Theme:
         then mirrors the major/minor font typefaces.  Slots that *other*
         cannot resolve (e.g. unsupported color types) are left
         untouched on this theme.
+
+        When ``rebind_shape_colors=True``, every shape in *presentation*
+        whose hardcoded RGB matches a slot in the **old** (pre-swap)
+        palette is rewritten to point at that theme slot instead — so
+        re-skinning a deck no longer leaves orphan literal colors.
+        Requires *presentation* to be supplied.
+
+        Returns the number of shape-color rebinds applied (0 when
+        ``rebind_shape_colors=False``).
         """
         if not isinstance(other, Theme):
             raise TypeError(f"apply() requires a Theme, got {type(other).__name__!r}")
 
+        # Snapshot the pre-swap palette so we can rebind matching shapes
+        # afterwards (rebinding by RGB only makes sense relative to the
+        # palette that was active when those RGBs were authored).
+        before_palette: dict[tuple[int, int, int], MSO_THEME_COLOR] = {}
+        if rebind_shape_colors:
+            if presentation is None:
+                raise ValueError(
+                    "rebind_shape_colors=True requires presentation= to be supplied"
+                )
+            for slot in MSO_THEME_COLOR:
+                if not slot.xml_value:
+                    continue
+                rgb = self.colors.get(slot)
+                if rgb is not None:
+                    # First-write wins so aliases (BACKGROUND_1 vs LIGHT_1)
+                    # don't shadow the canonical slot.
+                    before_palette.setdefault(tuple(int(c) for c in rgb), slot)
+
         src_colors = other.colors
         dst_colors = self.colors
         for slot in MSO_THEME_COLOR:
-            # Skip pseudo-slots like NOT_THEME_COLOR / MIXED whose
-            # xml_value is empty — they have no real clrScheme child.
             if not slot.xml_value:
                 continue
             rgb = src_colors.get(slot)
@@ -99,6 +130,142 @@ class Theme:
             self.fonts.major = other.fonts.major
         if other.fonts.minor:
             self.fonts.minor = other.fonts.minor
+
+        if not rebind_shape_colors:
+            return 0
+        return _rebind_shape_colors(presentation, before_palette)
+
+
+def embed_font(
+    presentation,
+    font_path: str,
+    *,
+    typeface: str | None = None,
+    weight: str = "regular",
+) -> str:
+    """Embed a TrueType/OpenType font into *presentation*.
+
+    Bundles the font binary as a package part under ``/ppt/fonts/`` and
+    registers it in the presentation's ``<p:embeddedFontLst>`` so it
+    travels with the deck and is used by readers that respect embedded
+    fonts (PowerPoint 2007+).
+
+    Parameters
+    ----------
+    presentation
+        The :class:`~power_pptx.presentation.Presentation` to embed into.
+    font_path
+        Filesystem path to a ``.ttf`` or ``.otf`` font file.
+    typeface
+        Family name to register. If omitted, the file's stem is used
+        (e.g. ``Inter-Regular.ttf`` → ``"Inter-Regular"``).
+    weight
+        One of ``"regular"`` / ``"bold"`` / ``"italic"`` / ``"boldItalic"``.
+
+    Returns the typeface that was registered.
+
+    Notes
+    -----
+    The font is embedded *unobfuscated* using content type
+    ``application/x-fontdata``. PowerPoint 2007+ accepts this form.
+    The fully-obfuscated form (per ECMA-376 §15.2.13) is on the roadmap.
+    Once an obfuscated path lands, calls written against this API will
+    not need to change.
+    """
+    import os
+
+    from power_pptx.opc.constants import CONTENT_TYPE as CT
+    from power_pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    from power_pptx.opc.package import Part
+
+    valid_weights = ("regular", "bold", "italic", "boldItalic")
+    if weight not in valid_weights:
+        raise ValueError(
+            f"weight must be one of {valid_weights}, got {weight!r}"
+        )
+    if not os.path.isfile(font_path):
+        raise FileNotFoundError(f"font file not found: {font_path}")
+    with open(font_path, "rb") as f:
+        blob = f.read()
+    if typeface is None:
+        typeface = os.path.splitext(os.path.basename(font_path))[0]
+
+    package = presentation.part.package
+    # Existing fontdata files in /ppt/fonts/font<N>.fntdata; allocate next.
+    partname = package.next_partname("/ppt/fonts/font%d.fntdata")
+    font_part = Part(partname, CT.X_FONTDATA, package, blob)
+
+    prs_part = package.presentation_part
+    rId = prs_part.relate_to(font_part, RT.FONT)
+
+    # Inject <p:embeddedFontLst> entry into presentation.xml.
+    _add_embedded_font_entry(prs_part.presentation, typeface, weight, rId)
+    return typeface
+
+
+def _add_embedded_font_entry(presentation, typeface: str, weight: str, rId: str) -> None:
+    """Add or extend a ``<p:embeddedFont>`` entry in presentation.xml.
+
+    If an entry already exists for *typeface*, the *weight* slot
+    (regular / bold / italic / boldItalic) is added to it.  Otherwise a
+    new ``<p:embeddedFont>`` is appended to ``<p:embeddedFontLst>``,
+    creating the list if needed.
+    """
+    pres_elm = presentation._element  # type: ignore[attr-defined]
+    p_ns = "http://schemas.openxmlformats.org/presentationml/2006/main"
+    a_ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    r_ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+    embedded_lst = pres_elm.find(qn("p:embeddedFontLst"))
+    if embedded_lst is None:
+        embedded_lst = OxmlElement("p:embeddedFontLst")
+        # Insert in CT_Presentation's schema-permitted position; appending
+        # at the end is acceptable per the schema (only handlerLst, custDataLst
+        # and extLst follow it; we don't generate those).
+        pres_elm.append(embedded_lst)
+
+    # Find existing entry for this typeface.
+    existing = None
+    for ef in embedded_lst.findall(qn("p:embeddedFont")):
+        font = ef.find(qn("p:font"))
+        if font is not None and font.get("typeface") == typeface:
+            existing = ef
+            break
+
+    if existing is None:
+        ef = OxmlElement("p:embeddedFont")
+        font = OxmlElement("p:font")
+        font.set("typeface", typeface)
+        ef.append(font)
+        embedded_lst.append(ef)
+        existing = ef
+
+    # Add weight slot if absent (PowerPoint disallows duplicates).
+    slot_elm = existing.find(qn(f"p:{weight}"))
+    if slot_elm is not None:
+        slot_elm.set(f"{{{r_ns}}}id", rId)
+    else:
+        slot_elm = OxmlElement(f"p:{weight}")
+        slot_elm.set(f"{{{r_ns}}}id", rId)
+        # Per the schema the order is regular, bold, italic, boldItalic
+        # *after* the <p:font> child. We append; PowerPoint accepts any
+        # of these in any order in practice, but most readers also do.
+        existing.append(slot_elm)
+
+
+# Method on Theme for the user-facing API.
+def _theme_embed_font(self, presentation, font_path, *, typeface=None, weight="regular"):
+    """Embed *font_path* into *presentation* and register it.
+
+    Convenience method on :class:`Theme`.  See :func:`embed_font` for
+    the full description.
+    """
+    return embed_font(
+        presentation, font_path, typeface=typeface, weight=weight
+    )
+
+
+Theme.embed_font = _theme_embed_font  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +500,55 @@ _CLR_SCHEME_SLOT_ORDER: tuple[str, ...] = (
     "accent1", "accent2", "accent3", "accent4", "accent5", "accent6",
     "hlink", "folHlink",
 )
+
+
+def _rebind_shape_colors(presentation, palette_map) -> int:
+    """Walk every shape in *presentation* and rebind hardcoded literal RGB
+    fills/lines/text colors to a theme slot when the literal matches.
+
+    *palette_map* maps ``(r, g, b)`` ints to ``MSO_THEME_COLOR`` enum
+    members — typically a snapshot of the old palette taken just before
+    a :meth:`Theme.apply` swap.
+
+    Implemented as a direct XML rewrite: any ``<a:srgbClr val="RRGGBB">``
+    whose value matches a key in *palette_map* is replaced in-place with
+    a ``<a:schemeClr val="<slot>"/>`` referencing the theme. The shape's
+    other children (alpha, lumMod, etc.) are preserved.
+
+    Returns the number of color references rebound.
+    """
+    if not palette_map:
+        return 0
+
+    # Build a hex-string lookup keyed by uppercase 6-char strings.
+    hex_map: dict[str, str] = {}
+    for (r, g, b), slot in palette_map.items():
+        hex_str = "{:02X}{:02X}{:02X}".format(r, g, b)
+        hex_map[hex_str] = slot.xml_value
+
+    a_srgbClr = qn("a:srgbClr")
+    a_schemeClr = qn("a:schemeClr")
+
+    rebound = 0
+    for slide in presentation.slides:
+        for srgb in slide._element.iter(a_srgbClr):  # type: ignore[attr-defined]
+            val = (srgb.get("val") or "").upper()
+            if val not in hex_map:
+                continue
+            scheme = OxmlElement("a:schemeClr")
+            scheme.set("val", hex_map[val])
+            # Preserve alpha/lumMod/etc. modifier children.
+            for child in list(srgb):
+                scheme.append(child)
+            srgb.tag = a_schemeClr
+            srgb.attrib.clear()
+            srgb.set("val", hex_map[val])
+            for child in list(srgb):
+                srgb.remove(child)
+            for child in list(scheme):
+                srgb.append(child)
+            rebound += 1
+    return rebound
 
 
 def _insert_clr_scheme_slot(clr_scheme, slot_elm, slot_name: str) -> None:

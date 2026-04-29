@@ -81,7 +81,16 @@ class TextFitter(tuple):
             Fit means text can be broken into lines that fit entirely within `extents`
             when rendered at `point_size` using the font defined in `font_file`.
             """
-            text_lines = self._wrap_lines(self._line_source, point_size)
+            try:
+                text_lines = self._wrap_lines(self._line_source, point_size)
+            except TypeError:
+                # No whole word fits in the available width at this size;
+                # treat as "doesn't fit" so the search continues to smaller
+                # point sizes rather than raising. The underlying cause is
+                # ``_break_line`` returning ``None`` when its predicate is
+                # never satisfied; whole-line breakage is the correct
+                # answer here.
+                return False
             cy = _rendered_size("Ty", point_size, self._font_file)[1]
             return (cy * len(text_lines)) <= self._height
 

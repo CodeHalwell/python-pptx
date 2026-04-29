@@ -89,6 +89,26 @@ class Table(object):
     def horz_banding(self, value: bool):
         self._tbl.bandRow = value
 
+    # Friendlier aliases — match the OOXML ``bandRow`` / ``bandCol``
+    # vocabulary that PowerPoint's UI uses ("banded rows / columns").
+    @property
+    def banded_rows(self) -> bool:
+        """Alias for :attr:`horz_banding` — alternating row shading."""
+        return self._tbl.bandRow
+
+    @banded_rows.setter
+    def banded_rows(self, value: bool):
+        self._tbl.bandRow = value
+
+    @property
+    def banded_cols(self) -> bool:
+        """Alias for :attr:`vert_banding` — alternating column shading."""
+        return self._tbl.bandCol
+
+    @banded_cols.setter
+    def banded_cols(self, value: bool):
+        self._tbl.bandCol = value
+
     def iter_cells(self) -> Iterator[_Cell]:
         """Generate _Cell object for each cell in this table.
 
@@ -152,6 +172,88 @@ class Table(object):
         accessed using list notation, e.g. `col = tbl.rows[0]`.
         """
         return _RowCollection(self._tbl, self)
+
+    def fit_to_box(
+        self,
+        *,
+        font_family: str = "Calibri",
+        max_font_pt: int = 18,
+        min_font_pt: int = 8,
+        bold: bool = False,
+        italic: bool = False,
+        font_file: str | None = None,
+    ) -> int:
+        """Shrink cell text font size until every cell fits within its bounds.
+
+        Walks every populated cell, computes the per-cell best-fit font
+        size against the cell's *own* width and row height (margins
+        respected), and applies the **smallest** of those sizes uniformly
+        to every cell — so the table reads as a single coherent grid
+        rather than each cell at its own size.
+
+        Returns the chosen size in points (clamped to ``min_font_pt``).
+
+        Useful for runtime-driven tables where row counts and string
+        lengths aren't known up front.
+
+        Parameters mirror :meth:`TextFrame.fit_text`.
+        """
+        from power_pptx.text.fonts import FontFiles
+        from power_pptx.text.layout import TextFitter
+        from power_pptx.util import Emu, Pt
+
+        if min_font_pt <= 0 or max_font_pt < min_font_pt:
+            raise ValueError(
+                "min_font_pt must be > 0 and max_font_pt must be >= min_font_pt"
+            )
+
+        if font_file is None:
+            try:
+                font_file = FontFiles.find(font_family, bold, italic)
+            except (KeyError, OSError):
+                font_file = None
+
+        # Default cell margins per OOXML: 0.1" left/right, 0.05" top/bottom.
+        DEFAULT_MARG_LR = 91440
+        DEFAULT_MARG_TB = 45720
+
+        cols = list(self.columns)
+        rows = list(self.rows)
+
+        per_cell_sizes: list[int] = []
+        for r_idx, row in enumerate(rows):
+            for c_idx, col in enumerate(cols):
+                cell = self.cell(r_idx, c_idx)
+                if not cell.text.strip():
+                    continue
+                marL = cell.margin_left if cell.margin_left is not None else DEFAULT_MARG_LR
+                marR = cell.margin_right if cell.margin_right is not None else DEFAULT_MARG_LR
+                marT = cell.margin_top if cell.margin_top is not None else DEFAULT_MARG_TB
+                marB = cell.margin_bottom if cell.margin_bottom is not None else DEFAULT_MARG_TB
+                cx = max(1, int(col.width) - int(marL) - int(marR))
+                cy = max(1, int(row.height) - int(marT) - int(marB))
+                try:
+                    size = TextFitter.best_fit_font_size(
+                        cell.text, (Emu(cx), Emu(cy)), max_font_pt, font_file
+                    )
+                except Exception:
+                    continue
+                if size is None:
+                    # Text genuinely does not fit at any size in this cell;
+                    # treat as ``min_font_pt``.
+                    per_cell_sizes.append(int(min_font_pt))
+                else:
+                    per_cell_sizes.append(int(size))
+
+        target = min(per_cell_sizes) if per_cell_sizes else max_font_pt
+        target = max(target, min_font_pt)
+
+        for cell in self.iter_cells():
+            for paragraph in cell.text_frame.paragraphs:
+                for run in paragraph.runs:
+                    run.font.size = Pt(target)
+
+        return int(target)
 
     @property
     def vert_banding(self) -> bool:
@@ -368,6 +470,43 @@ class _Cell(Subshape):
         return TextFrame(txBody, self)
 
     @property
+    def width(self) -> Length:
+        """Width of this cell in EMU (the parent column's width).
+
+        Exposed so that :meth:`TextFrame.fit_text` can measure against the
+        cell's bounds rather than the whole table when called on
+        ``cell.text_frame``.
+        """
+        tr = self._tc.getparent()
+        if tr is None:
+            return Emu(0)
+        try:
+            col_idx = list(tr).index(self._tc)
+        except ValueError:
+            return Emu(0)
+        tbl = tr.getparent()
+        if tbl is None:
+            return Emu(0)
+        try:
+            gridCol = tbl.tblGrid.gridCol_lst[col_idx]
+        except IndexError:
+            return Emu(0)
+        return Emu(int(gridCol.w))
+
+    @property
+    def height(self) -> Length:
+        """Height of this cell in EMU (the parent row's height).
+
+        Exposed so that :meth:`TextFrame.fit_text` can measure against the
+        cell's bounds rather than the whole table when called on
+        ``cell.text_frame``.
+        """
+        tr = self._tc.getparent()
+        if tr is None:
+            return Emu(0)
+        return Emu(int(tr.h or 0))
+
+    @property
     def vertical_anchor(self) -> MSO_VERTICAL_ANCHOR | None:
         """Vertical alignment of this cell.
 
@@ -399,6 +538,7 @@ class _Column(Subshape):
         super(_Column, self).__init__(parent)
         self._parent = parent
         self._gridCol = gridCol
+        self._tbl = getattr(parent, "_tbl", None)
 
     @property
     def width(self) -> Length:
@@ -409,6 +549,21 @@ class _Column(Subshape):
     def width(self, width: Length):
         self._gridCol.w = width
         self._parent.notify_width_changed()
+
+    @lazyproperty
+    def borders(self) -> _LineGroup:
+        """Convenience helper for setting borders on every cell in this column.
+
+        Mirrors :class:`_Borders` on a single cell, but applied across the
+        whole column.  Examples::
+
+            col.borders.left(width=Pt(2), color=RGBColor(0, 0, 0))
+            col.borders.outer(width=Pt(1))
+            col.borders.none()
+        """
+        if self._tbl is None:
+            return _LineGroup([])
+        return _LineGroup(_iter_column_cells(self._tbl, self._gridCol))
 
 
 class _Row(Subshape):
@@ -436,6 +591,34 @@ class _Row(Subshape):
     def height(self, height: Length):
         self._tr.h = height
         self._parent.notify_height_changed()
+
+    @lazyproperty
+    def borders(self) -> _LineGroup:
+        """Convenience helper for setting borders on every cell in this row.
+
+        Mirrors :class:`_Borders` on a single cell, but applied across the
+        whole row.  Examples::
+
+            row.borders.bottom(width=Pt(2), color=RGBColor(0, 0, 0))
+            row.borders.outer(width=Pt(1))
+            row.borders.none()
+        """
+        return _LineGroup(list(self._tr.tc_lst))
+
+
+def _iter_column_cells(tbl: CT_Table, gridCol):
+    """Return the list of ``CT_TableCell`` elements at this column's grid index."""
+    grid = list(tbl.tblGrid.gridCol_lst)
+    try:
+        col_idx = grid.index(gridCol)
+    except ValueError:
+        return []
+    cells = []
+    for tr in tbl.tr_lst:
+        tcs = tr.tc_lst
+        if col_idx < len(tcs):
+            cells.append(tcs[col_idx])
+    return cells
 
 
 class _CellCollection(Subshape):
@@ -628,3 +811,68 @@ class _Borders(object):
             line.width = width
         if color is not None:
             line.color.rgb = color if isinstance(color, RGBColor) else RGBColor(*color)
+
+
+class _LineGroup(object):
+    """Apply border edges across a group of cells (a row or a column).
+
+    Returned by ``row.borders`` and ``col.borders``.  Each edge accessor
+    is callable; calling it with ``width`` and/or ``color`` applies those
+    settings to that edge of every cell in the group.
+    """
+
+    def __init__(self, tcs):
+        self._tcs = tcs
+
+    def _apply_edge(
+        self,
+        edge: str,
+        width: Length | None,
+        color,
+    ) -> None:
+        from power_pptx.dml.color import RGBColor
+
+        for tc in self._tcs:
+            line = LineFormat(_BorderEdge(tc, edge))
+            if width is not None:
+                line.width = width
+            if color is not None:
+                line.color.rgb = (
+                    color if isinstance(color, RGBColor) else RGBColor(*color)
+                )
+
+    def left(self, width: Length | None = None, color=None) -> None:
+        """Apply *width* and/or *color* to the left edge of every cell."""
+        self._apply_edge("lnL", width, color)
+
+    def right(self, width: Length | None = None, color=None) -> None:
+        """Apply *width* and/or *color* to the right edge of every cell."""
+        self._apply_edge("lnR", width, color)
+
+    def top(self, width: Length | None = None, color=None) -> None:
+        """Apply *width* and/or *color* to the top edge of every cell."""
+        self._apply_edge("lnT", width, color)
+
+    def bottom(self, width: Length | None = None, color=None) -> None:
+        """Apply *width* and/or *color* to the bottom edge of every cell."""
+        self._apply_edge("lnB", width, color)
+
+    def all(self, width: Length | None = None, color=None) -> None:
+        """Apply *width* and/or *color* to all four outer edges of every cell."""
+        for edge in ("lnL", "lnR", "lnT", "lnB"):
+            self._apply_edge(edge, width, color)
+
+    outer = all  # alias for parity with ``cell.borders.outer``
+
+    def none(self) -> None:
+        """Clear every border edge from every cell in the group."""
+        for tc in self._tcs:
+            tcPr = tc.tcPr
+            if tcPr is None:
+                continue
+            tcPr._remove_lnL()
+            tcPr._remove_lnR()
+            tcPr._remove_lnT()
+            tcPr._remove_lnB()
+            tcPr._remove_lnTlToBr()
+            tcPr._remove_lnBlToTr()

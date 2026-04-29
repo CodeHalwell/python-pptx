@@ -111,6 +111,12 @@ class DescribeFontFiles(object):
     )
     def find_fixture(self, request, _installed_fonts_):
         family_name, is_bold, is_italic, expected_path = request.param
+        # Reset the cross-test class-level cache so the mock for
+        # ``_installed_fonts`` actually runs (otherwise an earlier
+        # ``FontFiles.find`` call elsewhere in the suite leaves the cache
+        # populated with real system fonts and the mock is bypassed).
+        FontFiles._font_files = None
+        request.addfinalizer(lambda: setattr(FontFiles, "_font_files", None))
         return family_name, is_bold, is_italic, expected_path
 
     @pytest.fixture(params=[("darwin", ["a", "b"]), ("win32", ["c", "d"])])

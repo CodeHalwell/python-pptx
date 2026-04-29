@@ -303,6 +303,38 @@ class BaseShape(object):
             raise ValueError("lint_group must be a non-empty string or None")
         cNvPr.set(_LINT_GROUP_ATTR, value)
 
+    def delete(self) -> None:
+        """Remove this shape from its slide and clean up dependent state.
+
+        In addition to removing the shape's XML element, this purges any
+        animation entries in the slide's timing tree that targeted this
+        shape.  PowerPoint silently "repairs" decks with orphan timing
+        references on open, but a clean tree avoids the prompt.
+
+        Equivalent in spirit to::
+
+            shape._element.getparent().remove(shape._element)
+
+        but with the cleanup pass that the manual idiom misses.
+        """
+        # Snapshot the slide reference *before* detaching the element,
+        # because once detached the parent walk would fail.
+        slide = None
+        try:
+            slide = self.part.slide  # type: ignore[attr-defined]
+        except Exception:
+            slide = None
+
+        parent = self._element.getparent()
+        if parent is not None:
+            parent.remove(self._element)
+
+        if slide is not None:
+            try:
+                slide.animations.purge_orphans()
+            except Exception:
+                pass
+
     @property
     def shape_type(self) -> MSO_SHAPE_TYPE:
         """A member of MSO_SHAPE_TYPE classifying this shape by type.

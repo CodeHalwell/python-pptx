@@ -8,11 +8,19 @@ Public entry point::
     report.summary()                   # human-readable string
     report.auto_fix()                  # mutates; returns list of fix descriptions
 
-Issue types shipped in this release:
+Issue types:
 
-* ``TextOverflow``   — text content likely exceeds the text-frame bounds.
-* ``ShapeCollision`` — two shapes' bounding boxes overlap significantly.
-* ``OffSlide``       — a shape extends (partly or wholly) outside the slide.
+* ``TextOverflow``             — text likely exceeds the text-frame bounds.
+* ``ShapeCollision``           — two shapes' bounding boxes overlap.
+* ``OffSlide``                 — a shape extends outside the slide.
+* ``MinFontSize``              — a text run is below the legibility threshold.
+* ``OffGridDrift``             — shape is slightly off a column/row grid that
+  several siblings hit cleanly.
+* ``LowContrast``              — text/background contrast is below WCAG AA.
+* ``ZOrderAnomaly``            — a filled card-shaped backdrop is drawn above
+  shapes it visually contains.
+* ``MasterPlaceholderCollision`` — a shape sits exactly on a placeholder it
+  should likely have inherited from the layout.
 """
 
 from __future__ import annotations
@@ -111,6 +119,109 @@ class ShapeCollision(LintIssue):
         self.intersection_pct = intersection_pct
 
 
+@dataclass
+class MinFontSize(LintIssue):
+    """A text run uses a font size below the configured legibility threshold."""
+
+    pt: float = 0.0
+    threshold_pt: float = 9.0
+
+    def __init__(self, shape: BaseShape, pt: float, threshold_pt: float):
+        super().__init__(
+            severity=LintSeverity.WARNING,
+            code="MinFontSize",
+            message=(
+                f"Shape '{shape.name}': run at {pt:.1f}pt is below the "
+                f"{threshold_pt:.0f}pt legibility threshold."
+            ),
+            shapes=(shape,),
+        )
+        self.pt = pt
+        self.threshold_pt = threshold_pt
+
+
+@dataclass
+class OffGridDrift(LintIssue):
+    """Shape sits slightly off a column/row grid that other shapes hit cleanly."""
+
+    axis: str = ""
+    drift_emu: int = 0
+    grid_emu: int = 0
+
+    def __init__(self, shape: BaseShape, axis: str, drift_emu: int, grid_emu: int):
+        drift_in = drift_emu / 914400.0
+        super().__init__(
+            severity=LintSeverity.WARNING,
+            code="OffGridDrift",
+            message=(
+                f"Shape '{shape.name}': {axis} edge is {drift_in:.3f}\" "
+                f"off the dominant grid line at {grid_emu / 914400.0:.3f}\"."
+            ),
+            shapes=(shape,),
+        )
+        self.axis = axis
+        self.drift_emu = drift_emu
+        self.grid_emu = grid_emu
+
+
+@dataclass
+class LowContrast(LintIssue):
+    """Text/background contrast ratio is below the WCAG AA threshold."""
+
+    ratio: float = 0.0
+    threshold: float = 4.5
+
+    def __init__(self, shape: BaseShape, ratio: float, threshold: float = 4.5):
+        super().__init__(
+            severity=LintSeverity.WARNING,
+            code="LowContrast",
+            message=(
+                f"Shape '{shape.name}': text-on-fill contrast ratio "
+                f"{ratio:.2f}:1 is below WCAG AA threshold ({threshold:.1f}:1)."
+            ),
+            shapes=(shape,),
+        )
+        self.ratio = ratio
+        self.threshold = threshold
+
+
+@dataclass
+class ZOrderAnomaly(LintIssue):
+    """A filled shape is drawn above a shape it visually contains."""
+
+    def __init__(self, container: BaseShape, contained: BaseShape):
+        super().__init__(
+            severity=LintSeverity.WARNING,
+            code="ZOrderAnomaly",
+            message=(
+                f"Shape '{container.name}' (filled) is drawn above "
+                f"'{contained.name}' that it visually contains; "
+                f"'{contained.name}' will be hidden."
+            ),
+            shapes=(container, contained),
+        )
+
+
+@dataclass
+class MasterPlaceholderCollision(LintIssue):
+    """A non-placeholder shape sits at exactly the position of a layout placeholder."""
+
+    placeholder_idx: int = 0
+
+    def __init__(self, shape: BaseShape, placeholder_idx: int):
+        super().__init__(
+            severity=LintSeverity.WARNING,
+            code="MasterPlaceholderCollision",
+            message=(
+                f"Shape '{shape.name}' sits at the position of layout "
+                f"placeholder idx={placeholder_idx}; it likely should have "
+                f"inherited from the placeholder instead of redrawing it."
+            ),
+            shapes=(shape,),
+        )
+        self.placeholder_idx = placeholder_idx
+
+
 class SlideLintReport:
     """Lint report for a single slide.
 
@@ -150,38 +261,66 @@ class SlideLintReport:
 
         Currently auto-fixable:
 
-        * ``OffSlide`` — nudges the shape so it sits inside the slide bounds.
+        * ``OffSlide``     — nudges the shape so it sits inside the slide bounds.
+        * ``OffGridDrift`` — snaps the shape's drifted edge onto the dominant
+          grid line (Tier 3 of the auto-fix tier list).
 
         Not auto-fixable:
 
-        * ``ShapeCollision`` — nudging shapes apart almost always breaks intent.
+        * ``ShapeCollision`` — nudging shapes apart almost always breaks intent;
+          tag intentional overlaps with ``shape.lint_group`` to suppress.
         * ``TextOverflow`` — requires designer judgment on font size / content.
+        * ``LowContrast``, ``MinFontSize``, ``ZOrderAnomaly``,
+          ``MasterPlaceholderCollision`` — require designer judgment.
         """
         fixes: list[str] = []
         slide_w, slide_h = _slide_dimensions(self._slide)
 
         for issue in list(self._issues):
-            if not isinstance(issue, OffSlide):
-                continue
-            shape = issue.shapes[0]
-            left, top, width, height = shape.left, shape.top, shape.width, shape.height
-            new_left, new_top = left, top
+            if isinstance(issue, OffSlide):
+                shape = issue.shapes[0]
+                left, top, width, height = shape.left, shape.top, shape.width, shape.height
+                new_left, new_top = left, top
 
-            if left < 0:
-                new_left = Emu(0)
-            if top < 0:
-                new_top = Emu(0)
-            if slide_w is not None and (left + width) > slide_w:
-                new_left = Emu(max(0, int(slide_w) - int(width)))
-            if slide_h is not None and (top + height) > slide_h:
-                new_top = Emu(max(0, int(slide_h) - int(height)))
+                if left < 0:
+                    new_left = Emu(0)
+                if top < 0:
+                    new_top = Emu(0)
+                if slide_w is not None and (left + width) > slide_w:
+                    new_left = Emu(max(0, int(slide_w) - int(width)))
+                if slide_h is not None and (top + height) > slide_h:
+                    new_top = Emu(max(0, int(slide_h) - int(height)))
 
-            if new_left != left or new_top != top:
-                desc = f"Nudged '{shape.name}' from ({left},{top}) to ({new_left},{new_top})."
-                fixes.append(desc)
-                if not dry_run:
-                    shape.left = new_left
-                    shape.top = new_top
+                if new_left != left or new_top != top:
+                    desc = (
+                        f"Nudged '{shape.name}' from ({left},{top}) to "
+                        f"({new_left},{new_top})."
+                    )
+                    fixes.append(desc)
+                    if not dry_run:
+                        shape.left = new_left
+                        shape.top = new_top
+
+            elif isinstance(issue, OffGridDrift):
+                shape = issue.shapes[0]
+                if issue.axis == "left":
+                    old, new = int(shape.left), issue.grid_emu
+                    desc = (
+                        f"Snapped '{shape.name}' left edge from {old} to "
+                        f"{new} EMU (grid)."
+                    )
+                    fixes.append(desc)
+                    if not dry_run:
+                        shape.left = Emu(new)
+                elif issue.axis == "top":
+                    old, new = int(shape.top), issue.grid_emu
+                    desc = (
+                        f"Snapped '{shape.name}' top edge from {old} to "
+                        f"{new} EMU (grid)."
+                    )
+                    fixes.append(desc)
+                    if not dry_run:
+                        shape.top = Emu(new)
 
         return fixes
 
@@ -362,6 +501,334 @@ def _check_collisions(
     return issues
 
 
+# ---------------------------------------------------------------------------
+# Min font size — flag any run below the legibility threshold (default 9pt).
+# ---------------------------------------------------------------------------
+
+_DEFAULT_MIN_FONT_PT = 9.0
+_PT_TO_EMU = 12700
+
+
+def _check_min_font_size(
+    shape: BaseShape, threshold_pt: float = _DEFAULT_MIN_FONT_PT
+) -> list[LintIssue]:
+    """Return a single MinFontSize issue if any run is below *threshold_pt*."""
+    issues: list[LintIssue] = []
+    if not shape.has_text_frame:
+        return issues
+    tf = shape.text_frame  # type: ignore[attr-defined]
+    smallest: float | None = None
+    for paragraph in tf.paragraphs:
+        for run in paragraph.runs:
+            try:
+                size = run.font.size
+            except (AttributeError, ValueError):
+                continue
+            if size is None:
+                continue
+            pt = float(size) / _PT_TO_EMU
+            if pt > 0 and (smallest is None or pt < smallest):
+                smallest = pt
+    if smallest is not None and smallest < threshold_pt:
+        issues.append(MinFontSize(shape, smallest, threshold_pt))
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# Off-grid drift — find shapes whose edge is slightly off a grid line that
+# at least three siblings hit cleanly.
+# ---------------------------------------------------------------------------
+
+# A shape is "on" a grid line if it's within this much of the cluster center
+# (1/100"). Anything further is potential drift.
+_GRID_TIGHT_TOLERANCE_EMU = 9144  # ~0.01"
+# Drift candidates must be within this much of a cluster (else they're just
+# unrelated edges).
+_GRID_LOOSE_TOLERANCE_EMU = 91440  # ~0.10"
+# A grid line needs at least this many shapes on it before we trust it.
+_GRID_MIN_CLUSTER = 3
+
+
+def _cluster_edges(values: list[int], tol: int) -> list[tuple[int, int]]:
+    """Return list of (cluster_center_emu, member_count) for clusters of values
+    that lie within *tol* of each other.
+
+    Greedy single-pass clustering; values are sorted, then any gap larger
+    than *tol* breaks the cluster.
+    """
+    if not values:
+        return []
+    sorted_v = sorted(values)
+    clusters: list[list[int]] = [[sorted_v[0]]]
+    for v in sorted_v[1:]:
+        if v - clusters[-1][-1] <= tol:
+            clusters[-1].append(v)
+        else:
+            clusters.append([v])
+    return [(int(round(sum(c) / len(c))), len(c)) for c in clusters]
+
+
+def _check_off_grid_drift(shapes: Sequence[BaseShape]) -> list[LintIssue]:
+    """Return OffGridDrift issues for shapes whose edges are slightly off a grid."""
+    issues: list[LintIssue] = []
+    if len(shapes) < _GRID_MIN_CLUSTER + 1:
+        return issues
+
+    bboxes = [_shape_bbox(s) for s in shapes]
+
+    for axis_name, edge_idx in (("left", 0), ("top", 1)):
+        edges = [b[edge_idx] for b in bboxes]
+        clusters = _cluster_edges(edges, _GRID_TIGHT_TOLERANCE_EMU)
+        # Only clusters with enough members are "grid lines".
+        grid_lines = [center for center, n in clusters if n >= _GRID_MIN_CLUSTER]
+        if not grid_lines:
+            continue
+        for shape, edge in zip(shapes, edges):
+            # Skip shapes that already sit on a grid line.
+            on_grid = any(
+                abs(edge - g) <= _GRID_TIGHT_TOLERANCE_EMU for g in grid_lines
+            )
+            if on_grid:
+                continue
+            # Find the closest grid line; if it's within the loose tolerance,
+            # this is drift.
+            closest = min(grid_lines, key=lambda g: abs(edge - g))
+            drift = abs(edge - closest)
+            if (
+                _GRID_TIGHT_TOLERANCE_EMU < drift <= _GRID_LOOSE_TOLERANCE_EMU
+            ):
+                issues.append(OffGridDrift(shape, axis_name, drift, closest))
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# Low contrast — compare text RGB against shape fill RGB (or, if absent,
+# slide background RGB) and warn when the ratio is below WCAG AA (4.5:1).
+# Skips silently when colors can't be resolved (theme color, gradient, etc.).
+# ---------------------------------------------------------------------------
+
+_CONTRAST_THRESHOLD = 4.5
+
+
+def _relative_luminance(rgb) -> float:
+    """Return WCAG relative luminance of an ``RGBColor``."""
+    r, g, b = (int(rgb[0]) / 255.0, int(rgb[1]) / 255.0, int(rgb[2]) / 255.0)
+
+    def _ch(c: float) -> float:
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * _ch(r) + 0.7152 * _ch(g) + 0.0722 * _ch(b)
+
+
+def _contrast_ratio(rgb_a, rgb_b) -> float:
+    """Return WCAG contrast ratio between two ``RGBColor`` values."""
+    la = _relative_luminance(rgb_a)
+    lb = _relative_luminance(rgb_b)
+    light, dark = (la, lb) if la >= lb else (lb, la)
+    return (light + 0.05) / (dark + 0.05)
+
+
+def _resolve_solid_rgb(fill):
+    """Return RGB of *fill* if it's an explicit solid RGB; ``None`` otherwise.
+
+    We deliberately don't resolve theme colors or gradients here — getting
+    that right requires walking the theme + clrMap. Skipping silently keeps
+    the lint check noise-free.
+    """
+    if fill is None:
+        return None
+    try:
+        from power_pptx.enum.dml import MSO_FILL_TYPE
+
+        if fill.type != MSO_FILL_TYPE.SOLID:
+            return None
+        return fill.fore_color.rgb
+    except Exception:
+        return None
+
+
+def _slide_background_rgb(slide: Slide):
+    """Best-effort RGB extraction from the slide's explicit background fill.
+
+    Returns ``None`` if the background inherits from the master/layout or is
+    not a solid RGB color.
+    """
+    try:
+        bg = slide._element.bg  # pyright: ignore[reportPrivateUsage]
+        if bg is None:
+            return None
+        from power_pptx.dml.fill import FillFormat
+
+        bgPr = slide._element.cSld.get_or_add_bgPr()  # pyright: ignore[reportPrivateUsage]
+        return _resolve_solid_rgb(FillFormat.from_fill_parent(bgPr))
+    except Exception:
+        return None
+
+
+def _check_low_contrast(shape: BaseShape, slide: Slide) -> list[LintIssue]:
+    """Return a LowContrast issue if shape's text has poor contrast against its fill."""
+    issues: list[LintIssue] = []
+    if not shape.has_text_frame:
+        return issues
+    tf = shape.text_frame  # type: ignore[attr-defined]
+    if not tf.text.strip():
+        return issues
+
+    # Pick the first run's font color (best-effort).
+    text_rgb = None
+    try:
+        for paragraph in tf.paragraphs:
+            for run in paragraph.runs:
+                try:
+                    rgb = run.font.color.rgb
+                except (AttributeError, ValueError):
+                    rgb = None
+                if rgb is not None:
+                    text_rgb = rgb
+                    break
+            if text_rgb is not None:
+                break
+    except Exception:
+        return issues
+    if text_rgb is None:
+        return issues
+
+    # Find a background to compare against: prefer shape fill, then slide bg.
+    bg_rgb = None
+    try:
+        bg_rgb = _resolve_solid_rgb(shape.fill)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    if bg_rgb is None:
+        bg_rgb = _slide_background_rgb(slide)
+    if bg_rgb is None:
+        return issues
+
+    ratio = _contrast_ratio(text_rgb, bg_rgb)
+    if ratio < _CONTRAST_THRESHOLD:
+        issues.append(LowContrast(shape, ratio, _CONTRAST_THRESHOLD))
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# Z-order anomaly — a filled shape A is drawn above shape B that A visually
+# contains. A's fill would hide B at render time.
+# ---------------------------------------------------------------------------
+
+
+def _bbox_contains(outer: tuple[int, int, int, int], inner: tuple[int, int, int, int]) -> bool:
+    """True if *inner* sits fully inside *outer* (with a small tolerance)."""
+    tol = 2  # EMU; tolerance for floating-point round trips
+    return (
+        outer[0] - tol <= inner[0]
+        and outer[1] - tol <= inner[1]
+        and outer[2] + tol >= inner[2]
+        and outer[3] + tol >= inner[3]
+        and (inner[2] - inner[0]) > 0
+        and (inner[3] - inner[1]) > 0
+    )
+
+
+def _shape_has_opaque_fill(shape: BaseShape) -> bool:
+    """Return ``True`` if *shape* has an opaque (solid) fill."""
+    try:
+        from power_pptx.enum.dml import MSO_FILL_TYPE
+
+        return shape.fill.type == MSO_FILL_TYPE.SOLID  # type: ignore[attr-defined]
+    except Exception:
+        return False
+
+
+def _check_z_order_anomalies(shapes: Sequence[BaseShape]) -> list[LintIssue]:
+    """Find filled shapes drawn above shapes they visually contain."""
+    issues: list[LintIssue] = []
+    bboxes = [_shape_bbox(s) for s in shapes]
+    # Document order = draw order; later shapes are drawn on top.
+    for j in range(len(shapes)):
+        # j is the candidate "container" drawn above earlier shapes
+        if not _shape_has_opaque_fill(shapes[j]):
+            continue
+        for i in range(j):
+            if not _bbox_contains(bboxes[j], bboxes[i]):
+                continue
+            # Tolerate identical bboxes — those are layered groups, not
+            # anomalies; the drift case is when j strictly contains i.
+            if bboxes[j] == bboxes[i]:
+                continue
+            issues.append(ZOrderAnomaly(container=shapes[j], contained=shapes[i]))
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# Master-placeholder collision — a non-placeholder shape whose bbox closely
+# matches a layout placeholder. Caller likely meant to populate the
+# placeholder rather than redraw it.
+# ---------------------------------------------------------------------------
+
+# Tolerance for deciding "same position" — 1/20".
+_PH_POS_TOLERANCE_EMU = 45720
+
+
+def _placeholder_bboxes(slide: Slide) -> list[tuple[int, int, int, int, int]]:
+    """Return (left, top, right, bottom, idx) for each layout placeholder.
+
+    Only inheritable placeholders that the slide doesn't already use are
+    returned.
+    """
+    out: list[tuple[int, int, int, int, int]] = []
+    try:
+        layout = slide.slide_layout
+    except Exception:
+        return out
+    used_idxs: set[int] = set()
+    try:
+        for ph in slide.placeholders:
+            used_idxs.add(int(ph.placeholder_format.idx))
+    except Exception:
+        pass
+    try:
+        for ph in layout.placeholders:
+            try:
+                idx = int(ph.placeholder_format.idx)
+            except Exception:
+                continue
+            if idx in used_idxs:
+                continue
+            l, t, r, b = _shape_bbox(ph)
+            if r - l <= 0 or b - t <= 0:
+                continue
+            out.append((l, t, r, b, idx))
+    except Exception:
+        return out
+    return out
+
+
+def _check_master_placeholder_collision(
+    slide: Slide, shapes: Sequence[BaseShape]
+) -> list[LintIssue]:
+    """Find shapes whose bbox lines up with an unused layout placeholder."""
+    issues: list[LintIssue] = []
+    ph_bboxes = _placeholder_bboxes(slide)
+    if not ph_bboxes:
+        return issues
+    for shape in shapes:
+        if shape.is_placeholder:
+            continue
+        sl, st, sr, sb = _shape_bbox(shape)
+        if sr - sl <= 0 or sb - st <= 0:
+            continue
+        for pl, pt, pr, pb, idx in ph_bboxes:
+            if (
+                abs(sl - pl) <= _PH_POS_TOLERANCE_EMU
+                and abs(st - pt) <= _PH_POS_TOLERANCE_EMU
+                and abs(sr - pr) <= _PH_POS_TOLERANCE_EMU
+                and abs(sb - pb) <= _PH_POS_TOLERANCE_EMU
+            ):
+                issues.append(MasterPlaceholderCollision(shape, idx))
+                break
+    return issues
+
+
 def lint_slide(slide: Slide) -> SlideLintReport:
     """Inspect *slide* for geometric and typographic issues.
 
@@ -375,8 +842,13 @@ def lint_slide(slide: Slide) -> SlideLintReport:
         if slide_w is not None and slide_h is not None:
             issues.extend(_check_off_slide(shape, slide_w, slide_h))
         issues.extend(_check_text_overflow(shape))
+        issues.extend(_check_min_font_size(shape))
+        issues.extend(_check_low_contrast(shape, slide))
 
     issues.extend(_check_collisions(shapes))
+    issues.extend(_check_off_grid_drift(shapes))
+    issues.extend(_check_z_order_anomalies(shapes))
+    issues.extend(_check_master_placeholder_collision(slide, shapes))
 
     # Sort: errors → warnings → info
     _order = {LintSeverity.ERROR: 0, LintSeverity.WARNING: 1, LintSeverity.INFO: 2}

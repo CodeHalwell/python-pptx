@@ -1,4 +1,4 @@
-"""Unit-test suite for `power_pptx.lint` — covers the lint-group feature."""
+"""Unit-test suite for `power_pptx.lint`."""
 
 from __future__ import annotations
 
@@ -7,8 +7,18 @@ import io
 import pytest
 
 from power_pptx import Presentation
-from power_pptx.lint import ShapeCollision, _LINT_GROUP_ATTR
-from power_pptx.util import Inches
+from power_pptx.dml.color import RGBColor
+from power_pptx.lint import (
+    LowContrast,
+    MasterPlaceholderCollision,
+    MinFontSize,
+    OffGridDrift,
+    ShapeCollision,
+    ZOrderAnomaly,
+    _LINT_GROUP_ATTR,
+    _contrast_ratio,
+)
+from power_pptx.util import Inches, Pt
 
 
 def _new_blank_slide():
@@ -196,3 +206,180 @@ class DescribeCollisionGroupSuppression:
             slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
             slide.shapes.add_shape(1, Inches(1.5), Inches(1.5), Inches(2), Inches(2))
         assert _collisions(slide) == []
+
+
+class DescribeMinFontSize:
+    def it_flags_a_run_below_threshold(self):
+        _, slide = _new_blank_slide()
+        tb = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(2), Inches(1))
+        tb.text_frame.paragraphs[0].text = "tiny"
+        tb.text_frame.paragraphs[0].runs[0].font.size = Pt(7)
+        issues = [i for i in slide.lint().issues if isinstance(i, MinFontSize)]
+        assert len(issues) == 1
+        assert issues[0].pt == 7.0
+        assert issues[0].threshold_pt == 9.0
+
+    def it_does_not_flag_at_threshold(self):
+        _, slide = _new_blank_slide()
+        tb = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(2), Inches(1))
+        tb.text_frame.paragraphs[0].text = "fine"
+        tb.text_frame.paragraphs[0].runs[0].font.size = Pt(9)
+        assert [i for i in slide.lint().issues if isinstance(i, MinFontSize)] == []
+
+    def it_skips_shapes_without_text(self):
+        _, slide = _new_blank_slide()
+        slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(1), Inches(1))
+        assert [i for i in slide.lint().issues if isinstance(i, MinFontSize)] == []
+
+
+class DescribeOffGridDrift:
+    def _column_with_drift(self):
+        _, slide = _new_blank_slide()
+        # Four shapes at exactly Inches(6).
+        for i in range(4):
+            slide.shapes.add_shape(
+                1, Inches(6), Inches(0.5 + i * 1.0), Inches(1), Inches(0.5)
+            )
+        # One drift offender ~0.033" off the column.
+        drift = slide.shapes.add_shape(
+            1, Inches(6) + 30000, Inches(5), Inches(1), Inches(0.5)
+        )
+        return slide, drift
+
+    def it_flags_a_shape_off_a_dominant_column(self):
+        slide, drift = self._column_with_drift()
+        issues = [i for i in slide.lint().issues if isinstance(i, OffGridDrift)]
+        # Shape proxies compare by underlying element, not identity.
+        assert any(
+            i.shapes[0] == drift and i.axis == "left" for i in issues
+        )
+
+    def it_does_not_flag_shapes_when_there_are_no_3plus_clusters(self):
+        _, slide = _new_blank_slide()
+        # Just two shapes — no grid line is strong enough.
+        slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(1), Inches(1))
+        slide.shapes.add_shape(1, Inches(1) + 30000, Inches(2), Inches(1), Inches(1))
+        assert [i for i in slide.lint().issues if isinstance(i, OffGridDrift)] == []
+
+    def it_can_auto_fix_by_snapping_to_the_grid(self):
+        slide, drift = self._column_with_drift()
+        before = int(drift.left)
+        report = slide.lint()
+        fixes = report.auto_fix()
+        assert any("Snapped" in f for f in fixes)
+        assert int(drift.left) == int(Inches(6))
+        # And the issue is gone on a fresh lint pass.
+        assert [
+            i for i in slide.lint().issues if isinstance(i, OffGridDrift)
+        ] == []
+        assert before != int(drift.left)
+
+
+class DescribeLowContrast:
+    def it_computes_wcag_contrast_ratio(self):
+        # Black on white is 21:1.
+        ratio = _contrast_ratio(RGBColor(0, 0, 0), RGBColor(255, 255, 255))
+        assert ratio == pytest.approx(21.0, rel=0.01)
+        # Yellow on white is awful.
+        ratio = _contrast_ratio(RGBColor(0xFF, 0xFF, 0x00), RGBColor(0xFF, 0xFF, 0xFF))
+        assert ratio < 2.0
+
+    def it_flags_low_contrast_text_on_filled_shape(self):
+        _, slide = _new_blank_slide()
+        tb = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(2), Inches(1))
+        tb.text_frame.paragraphs[0].text = "low"
+        tb.text_frame.paragraphs[0].runs[0].font.color.rgb = RGBColor(0xFF, 0xFF, 0x00)
+        tb.fill.solid()
+        tb.fill.fore_color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        issues = [i for i in slide.lint().issues if isinstance(i, LowContrast)]
+        assert len(issues) == 1
+        assert issues[0].ratio < 4.5
+
+    def it_does_not_flag_high_contrast(self):
+        _, slide = _new_blank_slide()
+        tb = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(2), Inches(1))
+        tb.text_frame.paragraphs[0].text = "fine"
+        tb.text_frame.paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 0, 0)
+        tb.fill.solid()
+        tb.fill.fore_color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        assert [i for i in slide.lint().issues if isinstance(i, LowContrast)] == []
+
+    def it_skips_silently_when_color_is_unresolvable(self):
+        # Theme color text on default fill — both unresolvable to RGB without
+        # walking the theme. We just want no false positives.
+        _, slide = _new_blank_slide()
+        tb = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(2), Inches(1))
+        tb.text_frame.paragraphs[0].text = "theme color"
+        # Don't set explicit colors -> nothing resolvable.
+        assert [i for i in slide.lint().issues if isinstance(i, LowContrast)] == []
+
+
+class DescribeZOrderAnomaly:
+    def it_flags_a_filled_shape_drawn_above_a_contained_shape(self):
+        _, slide = _new_blank_slide()
+        # Add the small textbox first, then a big filled rect that covers it.
+        small = slide.shapes.add_textbox(Inches(2), Inches(2), Inches(1), Inches(1))
+        small.text_frame.text = "hidden"
+        big = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(4), Inches(4))
+        big.fill.solid()
+        big.fill.fore_color.rgb = RGBColor(0, 0, 255)
+        issues = [i for i in slide.lint().issues if isinstance(i, ZOrderAnomaly)]
+        assert any(
+            i.shapes[0] == big and i.shapes[1] == small for i in issues
+        )
+
+    def it_does_not_flag_when_container_is_drawn_first(self):
+        _, slide = _new_blank_slide()
+        # Big rect first (drawn underneath); textbox added second (on top).
+        big = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(4), Inches(4))
+        big.fill.solid()
+        big.fill.fore_color.rgb = RGBColor(0, 0, 255)
+        slide.shapes.add_textbox(Inches(2), Inches(2), Inches(1), Inches(1))
+        assert [i for i in slide.lint().issues if isinstance(i, ZOrderAnomaly)] == []
+
+    def it_does_not_flag_unfilled_containers(self):
+        _, slide = _new_blank_slide()
+        small = slide.shapes.add_textbox(Inches(2), Inches(2), Inches(1), Inches(1))
+        small.text_frame.text = "visible"
+        # No fill on the big rect.
+        slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(4), Inches(4))
+        assert [i for i in slide.lint().issues if isinstance(i, ZOrderAnomaly)] == []
+
+
+class DescribeMasterPlaceholderCollision:
+    def it_flags_a_textbox_at_the_position_of_an_unused_layout_placeholder(self):
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[1])  # Title and Content
+        # Drop the title placeholder so its idx becomes "unused" on this slide.
+        title = slide.placeholders[0]
+        title._element.getparent().remove(title._element)
+        # Add a textbox at exactly the placeholder position.
+        layout_title = list(slide.slide_layout.placeholders)[0]
+        slide.shapes.add_textbox(
+            layout_title.left,
+            layout_title.top,
+            layout_title.width,
+            layout_title.height,
+        )
+        issues = [
+            i for i in slide.lint().issues
+            if isinstance(i, MasterPlaceholderCollision)
+        ]
+        assert len(issues) == 1
+        assert issues[0].placeholder_idx == 0
+
+    def it_does_not_flag_a_normally_inherited_placeholder(self):
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        # Slide already inherits the title; no extra textbox added.
+        assert [
+            i for i in slide.lint().issues
+            if isinstance(i, MasterPlaceholderCollision)
+        ] == []
+
+
+class DescribeReportSummary:
+    def it_lists_no_issues_when_clean(self):
+        _, slide = _new_blank_slide()
+        slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(1), Inches(1))
+        assert slide.lint().summary() == "No issues found."
