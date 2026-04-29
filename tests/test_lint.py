@@ -89,11 +89,14 @@ class DescribeShapeLintGroup:
         assert _LEGACY_LINT_GROUP_ATTR not in cNvPr.attrib
         assert _find_lint_ext(cNvPr) is None
 
-    def it_rejects_an_empty_string(self):
+    def it_accepts_empty_string_as_opt_out_of_implicit_groups(self):
+        # Empty-string is now a sentinel that overrides the implicit
+        # name-prefix grouping (see DescribeNamePrefixGroups) — round-trip
+        # the value verbatim rather than rejecting it.
         _, slide = _new_blank_slide()
         s = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
-        with pytest.raises(ValueError):
-            s.lint_group = ""
+        s.lint_group = ""
+        assert s.lint_group == ""
 
     def it_writes_metadata_via_extLst_not_a_custom_attribute(self):
         # Custom-namespaced *attributes* on cNvPr violate the OOXML schema
@@ -602,15 +605,19 @@ class DescribeShapeCollisionScoring:
         assert cs[0].kind == "partial"
         assert cs[0].severity == LintSeverity.WARNING
 
-    def it_classifies_near_identical_bboxes_as_matched_ERROR(self):
-        # Two rectangles at the same place — duplicate / copy-paste bug.
+    def it_classifies_near_identical_bboxes_as_matched_INFO(self):
+        # Two rectangles at the same place — almost always intentional
+        # visual layering (badge + number, button + label).  The kind
+        # stays ``matched`` so callers who really want to flag duplicates
+        # can filter on it, but the severity is INFO so ``has_errors``
+        # / CI pipelines aren't flooded by the common case.
         _, slide = _new_blank_slide()
         slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
         slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
         cs = _collisions(slide)
         assert len(cs) == 1
         assert cs[0].kind == "matched"
-        assert cs[0].severity == LintSeverity.ERROR
+        assert cs[0].severity == LintSeverity.INFO
         assert cs[0].score >= 0.85
 
     def it_runs_group_suppression_before_scoring(self):
@@ -784,3 +791,103 @@ class DescribeEffectBleedGeometry:
         codes = {i.code for i in report.issues}
         assert "OffSlide" in codes  # b's real off-slide still fires
         assert "OffSlideShadow" not in codes  # a's bleed silenced
+
+
+class DescribeNamePrefixGroups:
+    """Shapes with dotted names ('card.bg', 'card.label') auto-group."""
+
+    def it_treats_a_dotted_name_prefix_as_a_lint_group(self):
+        _, slide = _new_blank_slide()
+        a = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(3), Inches(2))
+        b = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(3), Inches(2))
+        a.name = "card.bg"
+        b.name = "card.label"
+        # No explicit `lint_group` set, but the dotted prefix matches —
+        # the collision should be suppressed.
+        report = slide.lint()
+        codes = [i.code for i in report.issues]
+        assert "ShapeCollision" not in codes
+
+    def it_still_flags_when_prefixes_differ(self):
+        _, slide = _new_blank_slide()
+        a = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(3), Inches(2))
+        b = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(3), Inches(2))
+        a.name = "card.bg"
+        b.name = "panel.bg"
+        report = slide.lint()
+        codes = [i.code for i in report.issues]
+        assert "ShapeCollision" in codes
+
+    def it_lets_an_empty_explicit_tag_opt_out(self):
+        _, slide = _new_blank_slide()
+        a = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(3), Inches(2))
+        b = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(3), Inches(2))
+        a.name = "card.bg"
+        b.name = "card.label"
+        a.lint_group = ""  # opt out of the implicit group
+        report = slide.lint()
+        codes = [i.code for i in report.issues]
+        assert "ShapeCollision" in codes
+
+
+class DescribeLintDisable:
+    """`lint_slide(slide, disable=[...], min_severity=...)`."""
+
+    def it_drops_disabled_codes(self):
+        _, slide = _new_blank_slide()
+        # Off-slide shape: would normally fire OffSlide.
+        slide.shapes.add_shape(1, Inches(-2), Inches(-2), Inches(1), Inches(1))
+        report = slide.lint(disable=["OffSlide"])
+        assert all(i.code != "OffSlide" for i in report.issues)
+
+    def it_filters_below_min_severity(self):
+        _, slide = _new_blank_slide()
+        # Two identical rectangles → 'matched' kind, INFO severity.
+        slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        baseline = slide.lint(min_severity="info").issues
+        warning_only = slide.lint(min_severity="warning").issues
+        assert any(i.severity == LintSeverity.INFO for i in baseline)
+        assert all(i.severity != LintSeverity.INFO for i in warning_only)
+
+    def it_rejects_invalid_min_severity(self):
+        _, slide = _new_blank_slide()
+        with pytest.raises(ValueError, match="min_severity"):
+            slide.lint(min_severity="bogus")
+
+
+class DescribeAutoFixSizeClamp:
+    """Auto-fix shrinks oversize shapes before nudging them on-slide."""
+
+    def it_clamps_a_shape_wider_than_the_slide(self):
+        prs, slide = _new_blank_slide()
+        slide_w = prs.slide_width
+        slide_h = prs.slide_height
+        # 50-inch wide shape — wider than any standard slide.
+        s = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(50), Inches(2))
+        report = slide.lint()
+        report.auto_fix()
+        assert int(s.width) <= int(slide_w)
+        assert int(s.left) + int(s.width) <= int(slide_w)
+        assert int(s.height) <= int(slide_h)
+
+
+class DescribeFingerprints:
+    """Stable digests for CI baselining."""
+
+    def it_is_stable_across_lint_calls(self):
+        _, slide = _new_blank_slide()
+        slide.shapes.add_shape(1, Inches(-2), Inches(-2), Inches(1), Inches(1))
+        a = slide.lint().fingerprints()
+        b = slide.lint().fingerprints()
+        assert a == b
+        assert all(len(fp) == 12 for fp in a)
+
+    def it_differs_between_distinct_issues(self):
+        _, slide = _new_blank_slide()
+        s1 = slide.shapes.add_shape(1, Inches(-2), Inches(-2), Inches(1), Inches(1))
+        s2 = slide.shapes.add_shape(1, Inches(-3), Inches(-3), Inches(1), Inches(1))
+        s1.name = "shape-A"
+        s2.name = "shape-B"
+        fps = slide.lint().fingerprints()
+        assert len(fps) == len(set(fps))
