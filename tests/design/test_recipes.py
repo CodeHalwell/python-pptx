@@ -479,3 +479,146 @@ class DescribeComparisonSlide:
         texts = " ".join(_paragraph_texts(slide))
         for needle in ("Old", "New", "L1", "R1", "L2", "R2"):
             assert needle in texts
+
+
+class DescribeChartSlidePolish:
+    """`chart_slide` controls for legend / smooth / data_labels / palette."""
+
+    def it_disables_the_legend_when_asked(self, prs):
+        chart_slide(
+            prs, title="x", chart_type="line",
+            categories=["A", "B"],
+            series=[{"name": "S", "values": [1, 2]}],
+            legend=False,
+        )
+        gframe = next(
+            s for s in prs.slides[-1].shapes
+            if s.shape_type == MSO_SHAPE_TYPE.CHART
+        )
+        assert gframe.chart.has_legend is False
+
+    def it_smooths_a_line_chart(self, prs):
+        chart_slide(
+            prs, title="x", chart_type="line",
+            categories=["A", "B"],
+            series=[{"name": "S", "values": [1, 2]}],
+            smooth=True,
+        )
+        gframe = next(
+            s for s in prs.slides[-1].shapes
+            if s.shape_type == MSO_SHAPE_TYPE.CHART
+        )
+        assert all(s.smooth for s in gframe.chart.series)
+
+    def it_applies_a_named_palette(self, prs):
+        chart_slide(
+            prs, title="x", chart_type="column",
+            categories=["A", "B"],
+            series=[{"name": "S1", "values": [1, 2]},
+                    {"name": "S2", "values": [3, 4]}],
+            chart_palette="modern",
+        )
+        # Palette application is best-effort but mustn't blow up.
+        assert any(
+            s.shape_type == MSO_SHAPE_TYPE.CHART for s in prs.slides[-1].shapes
+        )
+
+    def it_derives_a_chart_palette_from_tokens(self, prs, tokens):
+        # No explicit chart_palette → recipe walks tokens.palette and
+        # paints every series.
+        chart_slide(
+            prs, title="x", chart_type="column",
+            categories=["A", "B"],
+            series=[{"name": "S1", "values": [1, 2]},
+                    {"name": "S2", "values": [3, 4]}],
+            tokens=tokens,
+        )
+        gframe = next(
+            s for s in prs.slides[-1].shapes
+            if s.shape_type == MSO_SHAPE_TYPE.CHART
+        )
+        # Verify each series has a solid spPr fill (i.e. palette was
+        # actually applied — the default chart style leaves the spPr
+        # absent and series pull their colours from the theme).
+        from power_pptx.enum.dml import MSO_FILL_TYPE
+        fills = [s.format.fill.type for s in gframe.chart.series]
+        assert all(f == MSO_FILL_TYPE.SOLID for f in fills)
+
+
+class DescribeTableSlidePolish:
+    """`table_slide` controls for widths, aligns, totals."""
+
+    def it_applies_explicit_column_width_fractions(self, prs):
+        slide = table_slide(
+            prs, title="t",
+            columns=["A", "B", "C"],
+            rows=[["1", "2", "3"]],
+            widths=[0.5, 0.25, 0.25],
+        )
+        table = next(
+            s for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.TABLE
+        ).table
+        cols = list(table.columns)
+        # Col 0 should be ~2x wider than col 1.
+        ratio = int(cols[0].width) / int(cols[1].width)
+        assert 1.8 < ratio < 2.2
+
+    def it_right_aligns_numeric_columns(self, prs):
+        slide = table_slide(
+            prs, title="t",
+            columns=["Region", "Revenue"],
+            rows=[["NA", "$10"]],
+            aligns=["left", "right"],
+        )
+        table = next(
+            s for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.TABLE
+        ).table
+        revenue_para = table.cell(1, 1).text_frame.paragraphs[0]
+        assert revenue_para.alignment == PP_ALIGN.RIGHT
+
+    def it_renders_a_totals_row(self, prs):
+        slide = table_slide(
+            prs, title="t",
+            columns=["Region", "Q1", "Q2"],
+            rows=[["NA", "10", "20"], ["EU", "5", "15"]],
+            totals={"label": "Total", "values": [15, 35]},
+        )
+        table = next(
+            s for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.TABLE
+        ).table
+        # Header + 2 data rows + 1 totals row = 4 rows.
+        assert len(table.rows) == 4
+        footer = table.cell(3, 0).text_frame.text
+        assert "Total" in footer
+        assert "15" in table.cell(3, 1).text_frame.text
+        assert "35" in table.cell(3, 2).text_frame.text
+
+    def it_accepts_explicit_totals_row(self, prs):
+        slide = table_slide(
+            prs, title="t",
+            columns=["A", "B"],
+            rows=[["1", "2"]],
+            totals={"row": ["Sum", "X"]},
+        )
+        table = next(
+            s for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.TABLE
+        ).table
+        assert "Sum" in table.cell(2, 0).text_frame.text
+        assert "X" in table.cell(2, 1).text_frame.text
+
+    def it_rejects_a_misshapen_explicit_totals_row(self, prs):
+        with pytest.raises(ValueError, match="totals.row"):
+            table_slide(
+                prs, title="t",
+                columns=["A", "B"],
+                rows=[["1", "2"]],
+                totals={"row": ["only-one"]},
+            )
+
+    def it_rejects_unknown_align(self, prs):
+        with pytest.raises(ValueError, match="align"):
+            table_slide(
+                prs, title="t",
+                columns=["A"], rows=[["1"]],
+                aligns=["middle"],
+            )

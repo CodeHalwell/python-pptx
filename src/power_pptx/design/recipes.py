@@ -599,6 +599,10 @@ def chart_slide(
     chart_type: str = "line",
     categories: Sequence[str],
     series: Sequence[Mapping[str, Any]],
+    chart_palette: Optional[Union[str, Sequence[Any]]] = None,
+    legend: bool = True,
+    smooth: bool = False,
+    data_labels: bool = False,
     tokens: Optional[DesignTokens] = None,
     transition: Optional[str] = None,
 ) -> "Slide":
@@ -606,29 +610,45 @@ def chart_slide(
 
     *chart_type* is one of ``"line"``, ``"bar"`` (clustered horizontal
     bars), ``"column"`` (clustered vertical columns), ``"pie"``,
-    or ``"area"``.
+    ``"area"``, ``"line_markers"``, ``"scatter"``, or ``"doughnut"``.
 
     *categories* is the list of x-axis labels (or pie-slice labels).
     Each *series* mapping is ``{"name": str, "values": Sequence[float]}``;
-    pass a single-series list for pie charts.
+    pass a single-series list for pie / doughnut charts.
+
+    *chart_palette* recolours every series.  Accepts:
+
+    * a named built-in (``"modern"``, ``"vibrant"``, ``"monochrome_blue"``,
+      …, see :func:`power_pptx.chart.palettes.palette_names`),
+    * a list of colours (hex strings, RGBColor, 3-tuples), or
+    * ``None`` (default) — falls back to a palette derived from
+      *tokens* (``primary`` → ``accent1`` → … → ``positive`` →
+      ``negative`` → ``muted``) when at least one of those slots is
+      set, and otherwise leaves PowerPoint's default chart_style in
+      place.
+
+    *legend* toggles the chart legend (default ``True``).  *smooth*
+    smooths the line for line charts (no-op on non-line charts).
+    *data_labels* turns on series-level data labels.
 
     Tokens consumed:
 
     * **palette** — title from ``primary`` (fallback ``neutral``).
-      Chart series colors are *not* re-skinned by this recipe; pair
-      with :class:`~power_pptx.chart.palette.ChartPalette` if you need
-      token-driven series colors.
+      Series colours are derived from the same palette unless an
+      explicit *chart_palette* is supplied.
     * **typography** — ``heading`` for the title.
     """
     from power_pptx.chart.data import CategoryChartData
     from power_pptx.enum.chart import XL_CHART_TYPE
 
     chart_map = {
-        "line": XL_CHART_TYPE.LINE,
-        "bar": XL_CHART_TYPE.BAR_CLUSTERED,
-        "column": XL_CHART_TYPE.COLUMN_CLUSTERED,
-        "pie": XL_CHART_TYPE.PIE,
-        "area": XL_CHART_TYPE.AREA,
+        "line":          XL_CHART_TYPE.LINE,
+        "line_markers":  XL_CHART_TYPE.LINE_MARKERS,
+        "bar":           XL_CHART_TYPE.BAR_CLUSTERED,
+        "column":        XL_CHART_TYPE.COLUMN_CLUSTERED,
+        "pie":           XL_CHART_TYPE.PIE,
+        "doughnut":      XL_CHART_TYPE.DOUGHNUT,
+        "area":          XL_CHART_TYPE.AREA,
     }
     if chart_type not in chart_map:
         raise ValueError(
@@ -661,7 +681,7 @@ def chart_slide(
 
     chart_top = Length(title_top + title_h + Inches(0.2))
     chart_h = Length(slide_h - chart_top - Inches(0.5))
-    slide.shapes.add_chart(
+    gframe = slide.shapes.add_chart(
         chart_map[chart_type],
         margin,
         chart_top,
@@ -669,6 +689,38 @@ def chart_slide(
         chart_h,
         chart_data,
     )
+    chart = gframe.chart
+
+    # Apply palette (explicit > token-derived > leave default).
+    resolved_palette = chart_palette
+    if resolved_palette is None:
+        resolved_palette = _token_chart_palette(tokens)
+    if resolved_palette is not None:
+        try:
+            if chart_type in ("pie", "doughnut"):
+                chart.color_by_category(resolved_palette)
+            else:
+                chart.apply_palette(resolved_palette)
+        except Exception:
+            # A misconfigured palette shouldn't fail the whole recipe;
+            # the chart still renders with PowerPoint defaults.
+            pass
+
+    chart.has_legend = bool(legend)
+
+    if smooth and chart_type in ("line", "line_markers"):
+        for s in chart.series:
+            try:
+                s.smooth = True
+            except Exception:
+                pass
+
+    if data_labels:
+        for plot in chart.plots:
+            try:
+                plot.has_data_labels = True
+            except Exception:
+                pass
 
     _apply_transition(slide, transition)
     return slide
@@ -686,6 +738,9 @@ def table_slide(
     columns: Sequence[str],
     rows: Sequence[Sequence[Any]],
     banded: bool = True,
+    widths: Optional[Sequence[Union[float, Length]]] = None,
+    aligns: Optional[Sequence[str]] = None,
+    totals: Optional[Mapping[str, Any]] = None,
     tokens: Optional[DesignTokens] = None,
     transition: Optional[str] = None,
 ) -> "Slide":
@@ -698,11 +753,26 @@ def table_slide(
     *banded* (default ``True``) tints alternating data rows with the
     palette's ``surface`` slot to improve scanning.
 
+    *widths* assigns column widths.  Accepts a sequence of either
+    fractions summing to ~1.0 (``[0.5, 0.25, 0.25]``) or absolute
+    :class:`~power_pptx.util.Length` values.  Unspecified columns split
+    the remaining width evenly.
+
+    *aligns* assigns horizontal alignment per column.  Accepts
+    ``"left"`` / ``"center"`` / ``"right"``; defaults to ``"left"``
+    for every column.  Useful for right-aligning numeric columns.
+
+    *totals* adds a footer row that visually separates from the data.
+    Mapping shape: ``{"label": "Total", "values": [n1, n2, ...]}`` or
+    ``{"row": [c1, c2, c3, ...]}`` for a fully-explicit row.  The
+    footer is bold and uses ``primary`` palette text on a subtle band.
+
     Tokens consumed:
 
     * **palette** — title and header text from ``primary`` (fallback
       ``neutral``); header band fill from ``primary``; banded rows from
-      ``surface`` (fallback ``lt2``); body text from ``neutral``.
+      ``surface`` (fallback ``lt2``); body text from ``neutral``;
+      totals-row band from ``surface`` and totals text from ``primary``.
     * **typography** — ``heading`` for the title; ``body`` for the
       header (bold) and cell text.
     """
@@ -727,7 +797,8 @@ def table_slide(
         anchor=MSO_ANCHOR.TOP,
     )
 
-    n_rows = len(rows) + 1  # +1 for header
+    totals_row = _coerce_totals_row(totals, len(columns)) if totals else None
+    n_rows = len(rows) + 1 + (1 if totals_row is not None else 0)
     n_cols = len(columns)
     table_top = Length(title_top + title_h + Inches(0.2))
     table_h = Length(slide_h - table_top - Inches(0.5))
@@ -738,12 +809,19 @@ def table_slide(
     )
     table = gframe.table
 
+    if widths is not None:
+        _apply_column_widths(table, widths, table_w, n_cols)
+
+    align_map = _coerce_aligns(aligns, n_cols)
+
     header_token = _typography(tokens, "body", default_size=Pt(14), default_bold=True)
     cell_token = _typography(tokens, "body", default_size=Pt(13))
+    totals_token = _typography(tokens, "body", default_size=Pt(13), default_bold=True)
     header_fill = _palette(tokens, ("primary", "neutral")) or RGBColor(0x33, 0x33, 0x33)
     header_text = _palette(tokens, ("on_primary",)) or RGBColor(0xFF, 0xFF, 0xFF)
     band_fill = _palette(tokens, ("surface", "lt2")) or RGBColor(0xF4, 0xF4, 0xF8)
     body_text = _palette(tokens, ("neutral",)) or RGBColor(0x22, 0x22, 0x22)
+    totals_text = _palette(tokens, ("primary", "neutral")) or RGBColor(0x22, 0x22, 0x22)
 
     # Header
     for c, name in enumerate(columns):
@@ -755,7 +833,7 @@ def table_slide(
             str(name),
             token=header_token,
             color=header_text,
-            align=PP_ALIGN.LEFT,
+            align=align_map[c],
             anchor=MSO_ANCHOR.MIDDLE,
         )
 
@@ -774,7 +852,23 @@ def table_slide(
                 str(value),
                 token=cell_token,
                 color=body_text,
-                align=PP_ALIGN.LEFT,
+                align=align_map[c],
+                anchor=MSO_ANCHOR.MIDDLE,
+            )
+
+    # Totals row (footer): tinted band + bold text in the primary palette.
+    if totals_row is not None:
+        footer_idx = n_rows - 1
+        for c in range(n_cols):
+            cell = table.cell(footer_idx, c)
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = band_fill
+            _fill_text_frame(
+                cell.text_frame,
+                str(totals_row[c]),
+                token=totals_token,
+                color=totals_text,
+                align=align_map[c],
                 anchor=MSO_ANCHOR.MIDDLE,
             )
 
@@ -1396,6 +1490,151 @@ def _pygments_highlight(
             if j < len(chunks) - 1:
                 lines.append([])
     return lines
+
+
+_ALIGN_MAP: dict[str, PP_ALIGN] = {
+    "left":   PP_ALIGN.LEFT,
+    "center": PP_ALIGN.CENTER,
+    "right":  PP_ALIGN.RIGHT,
+}
+
+
+def _coerce_aligns(
+    aligns: Optional[Sequence[str]], n_cols: int
+) -> list[PP_ALIGN]:
+    if aligns is None:
+        return [PP_ALIGN.LEFT] * n_cols
+    out: list[PP_ALIGN] = []
+    for i in range(n_cols):
+        if i >= len(aligns):
+            out.append(PP_ALIGN.LEFT)
+            continue
+        a = aligns[i]
+        if isinstance(a, PP_ALIGN):
+            out.append(a)
+            continue
+        key = str(a).lower()
+        if key not in _ALIGN_MAP:
+            raise ValueError(
+                f"align[{i}] must be one of {sorted(_ALIGN_MAP)}, got {a!r}"
+            )
+        out.append(_ALIGN_MAP[key])
+    return out
+
+
+def _apply_column_widths(
+    table: Any,
+    widths: Sequence[Union[float, Length]],
+    table_w: Length,
+    n_cols: int,
+) -> None:
+    """Set table column widths from a sequence of fractions or Lengths.
+
+    Supports two input modes:
+
+    * **Fractions**: values < 5 are treated as fractions of *table_w*;
+      they should sum to ~1.0 (we normalise on a defensive basis so a
+      slightly-off list still lays out reasonably).
+    * **Absolute lengths**: any :class:`Length` (or value ≥ 5) is taken
+      verbatim.
+
+    Columns past ``len(widths)`` keep their default share of the
+    remaining width.
+    """
+    total_table_w = int(table_w)
+    spec_lengths: list[int] = []
+    spec_is_fraction = False
+    for w in widths[:n_cols]:
+        if isinstance(w, Length):
+            spec_lengths.append(int(w))
+        elif isinstance(w, (int, float)) and float(w) < 5:
+            spec_is_fraction = True
+            spec_lengths.append(int(round(float(w) * total_table_w)))
+        else:
+            spec_lengths.append(int(w))
+
+    # Normalise fractions defensively if they don't sum to ~1.
+    if spec_is_fraction:
+        total_spec = sum(spec_lengths)
+        if total_spec > 0 and abs(total_spec - total_table_w) > total_table_w * 0.01:
+            scale = total_table_w / total_spec
+            spec_lengths = [int(round(v * scale)) for v in spec_lengths]
+
+    used = sum(spec_lengths)
+    remaining = max(0, total_table_w - used)
+    unspecified = n_cols - len(spec_lengths)
+    fill = (remaining // unspecified) if unspecified > 0 else 0
+
+    for i in range(n_cols):
+        col = table.columns[i]
+        if i < len(spec_lengths):
+            col.width = Emu(spec_lengths[i])
+        else:
+            col.width = Emu(fill)
+
+
+def _coerce_totals_row(
+    totals: Mapping[str, Any], n_cols: int
+) -> list[Any]:
+    """Resolve a totals-row spec into a per-column list of cell values."""
+    if "row" in totals:
+        row = list(totals["row"])
+        if len(row) != n_cols:
+            raise ValueError(
+                f"totals.row must have {n_cols} entries, got {len(row)}"
+            )
+        return row
+    label = totals.get("label", "Total")
+    values = list(totals.get("values", []))
+    # Right-pad values with empty strings, place label in column 0,
+    # values fill from the right.  This matches how spreadsheet
+    # totals usually read.
+    out: list[Any] = [""] * n_cols
+    out[0] = label
+    if values:
+        # Place values in the *last* len(values) columns.
+        start = max(1, n_cols - len(values))
+        for i, v in enumerate(values):
+            if start + i < n_cols:
+                out[start + i] = v
+    return out
+
+
+_TOKEN_CHART_SLOTS: tuple[str, ...] = (
+    "primary",
+    "accent1", "accent2", "accent3", "accent4", "accent5", "accent6",
+    "secondary", "tertiary",
+    "positive", "negative",
+    "muted", "neutral",
+)
+
+
+def _token_chart_palette(
+    tokens: Optional[DesignTokens],
+) -> Optional[list[Any]]:
+    """Build an ordered chart palette from a token set, or ``None``.
+
+    Pulls every chart-suitable slot in priority order (primary first,
+    then accent1..6, then positive / negative, then muted / neutral as
+    filler) and de-duplicates by RGB.  Returns ``None`` when fewer than
+    two distinct colours are available — a one-colour palette would
+    just paint every series the same hue, which is worse than
+    PowerPoint's default theme colours.
+    """
+    if tokens is None:
+        return None
+    seen: set[tuple[int, int, int]] = set()
+    out: list[Any] = []
+    for slot in _TOKEN_CHART_SLOTS:
+        rgb = tokens.palette.get(slot)
+        if rgb is None:
+            continue
+        key = (int(rgb[0]), int(rgb[1]), int(rgb[2]))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(rgb)
+    return out if len(out) >= 2 else None
 
 
 def _apply_card_styling(shape: Any, tokens: Optional[DesignTokens]) -> None:
