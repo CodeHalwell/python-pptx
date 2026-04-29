@@ -706,6 +706,37 @@ class DescribeEffectBleedGeometry:
         # And it must not blow up when threaded through lint().
         _ = BaseShape  # silence unused-import lint
 
+    def it_uses_a_shadow_specific_message_for_OffSlideShadow(self):
+        # The bleed-only variant must not reuse OffSlide's "extends
+        # beyond the … edge" wording, since the raw bbox is on-slide.
+        _, slide = _new_blank_slide()
+        slide_w, _slide_h = self._slide_dims(slide)
+        s = slide.shapes.add_shape(
+            1, slide_w - Inches(2), Inches(1), Inches(2), Inches(2)
+        )
+        s.shadow.blur_radius = Emu(914400)
+        report = slide.lint(include_effect_bleed=True)
+        bleed = [i for i in report.issues if isinstance(i, OffSlideShadow)]
+        assert bleed, "expected at least one OffSlideShadow"
+        msg = bleed[0].message
+        assert "shadow bleed" in msg
+        assert "raw bbox is on-slide" in msg
+
+    def it_uses_a_shadow_specific_message_for_ShapeCollisionShadow(self):
+        # Same — the raw bboxes don't overlap, only the inflated ones
+        # do, so "Shapes … overlap …" would mislead.
+        _, slide = _new_blank_slide()
+        a = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(2))
+        b = slide.shapes.add_shape(1, Inches(4), Inches(1), Inches(2), Inches(2))
+        a.shadow.blur_radius = Emu(914400 * 4)
+        b.shadow.blur_radius = Emu(914400 * 4)
+        report = slide.lint(include_effect_bleed=True)
+        bleed = [i for i in report.issues if isinstance(i, ShapeCollisionShadow)]
+        assert bleed, "expected at least one ShapeCollisionShadow"
+        msg = bleed[0].message
+        assert "shadow bleed" in msg
+        assert "raw bboxes do not" in msg
+
     def it_preserves_include_effect_bleed_through_auto_fix_refresh(self):
         # Regression: ``auto_fix()`` refreshes ``report.issues`` by
         # calling ``slide.lint()``.  If the original report was built

@@ -105,6 +105,13 @@ class OffSlideShadow(OffSlide):
 
     def __init__(self, shape: BaseShape, side: str):
         super().__init__(shape, side, code="OffSlideShadow")
+        # The raw bbox stays on-slide; only the shadow bleed crosses
+        # the edge, so the inherited "Shape extends beyond …" message
+        # would mislead readers.
+        self.message = (
+            f"Shape '{shape.name}': shadow bleed extends beyond the "
+            f"{side} edge of the slide (raw bbox is on-slide)."
+        )
 
 
 @dataclass
@@ -200,6 +207,19 @@ class ShapeCollisionShadow(ShapeCollision):
             score=score,
             kind=kind,
             code="ShapeCollisionShadow",
+        )
+        # The raw bboxes don't overlap; only the shadow-inflated ones
+        # do, so the inherited "Shapes … overlap …" wording from
+        # ShapeCollision would mislead readers.
+        group_suffix = ""
+        if groups != (None, None):
+            group_suffix = f" [groups: {groups[0]!r} vs {groups[1]!r}]"
+        self.message = (
+            f"Shapes '{shape_a.name}' and '{shape_b.name}': shadow bleed "
+            f"regions overlap ({intersection_pct:.0%} of the smaller "
+            f"shape's area), though the raw bboxes do not "
+            f"[kind={kind}, score={score:.2f}]"
+            + group_suffix
         )
 
 
