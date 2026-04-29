@@ -24,6 +24,9 @@ Typical usage::
     from power_pptx.util import Inches
     MotionPath.line(slide, shape, Inches(2), Inches(1))
 
+    # Or pass an SVG-style path with a viewbox.
+    MotionPath.svg(slide, shape, "M 0 0 H 100 V 100", viewbox=(0, 0, 100, 100))
+
     # Fade in each paragraph of a text frame, one after another
     Entrance.fade(slide, text_frame, by_paragraph=True)
 
@@ -1386,9 +1389,16 @@ class MotionPath:
     ) -> None:
         """Move *shape* along an arbitrary OOXML motion *path* string.
 
-        *path* is a PowerPoint motion-path expression, e.g.
-        ``"M 0 0 L 0.5 0 E"`` for a horizontal half-slide hop.  The
-        terminating ``E`` (path end) is required.
+        *path* is a PowerPoint motion-path expression — the same syntax
+        the ``<p:animMotion>`` element uses internally.  Coordinates are
+        slide-normalized: ``(0, 0)`` is the shape's starting position,
+        ``(1, 0)`` is one slide-width to the right, ``(0, 1)`` is one
+        slide-height down.  The terminating ``E`` (path end) is required,
+        e.g. ``"M 0 0 L 0.5 0 E"`` for a horizontal half-slide hop.
+
+        For the more common SVG path syntax — absolute / relative
+        commands, no terminator, pixel-style coordinates — use
+        :meth:`svg` instead.
         """
         if not path or "E" not in path:
             raise ValueError(
@@ -1396,6 +1406,50 @@ class MotionPath:
             )
         slide.animations.add_motion(
             shape, path, trigger=trigger, delay=delay, duration=duration
+        )
+
+    @classmethod
+    def svg(
+        cls,
+        slide: Slide,
+        shape: BaseShape,
+        path: str,
+        *,
+        viewbox: tuple[float, float, float, float] | None = None,
+        trigger: PP_ANIM_TRIGGER = _TRIGGER_UNSET,  # pyright: ignore[reportArgumentType]
+        delay: int = 0,
+        duration: int = 2000,
+    ) -> None:
+        """Move *shape* along an SVG-style motion path.
+
+        Accepts the standard SVG path mini-language with the commands
+        most commonly seen in design-tool exports:
+
+        * ``M / m`` — moveto (absolute / relative)
+        * ``L / l`` — lineto
+        * ``H / h`` — horizontal lineto
+        * ``V / v`` — vertical lineto
+        * ``C / c`` — cubic bezier curveto
+        * ``Q / q`` — quadratic bezier curveto
+        * ``Z / z`` — closepath (returns to the most-recent moveto)
+
+        Coordinates are interpreted against *viewbox* (a 4-tuple
+        ``(min_x, min_y, width, height)``).  When *viewbox* is ``None``
+        the path is assumed to live in the unit square ``(0, 0, 1, 1)``,
+        which mirrors PowerPoint's slide-normalised coordinate system —
+        useful for paths hand-authored in the same coordinate space.
+
+        The first point of the SVG path becomes the shape's starting
+        position (``M 0 0`` in OOXML terms) so ``MotionPath.svg(slide,
+        shape, "M 0 0 L 100 0", viewbox=(0, 0, 100, 100))`` is
+        equivalent to ``MotionPath.line(slide, shape, slide_w, 0)``.
+
+        The ``E`` terminator that OOXML expects is appended automatically;
+        callers don't need to include one in *path*.
+        """
+        normalised = _svg_to_ooxml_motion_path(path, viewbox=viewbox)
+        slide.animations.add_motion(
+            shape, normalised, trigger=trigger, delay=delay, duration=duration
         )
 
     @classmethod
@@ -1590,6 +1644,192 @@ class MotionPath:
         slide.animations.add_motion(
             shape, path, trigger=trigger, delay=delay, duration=duration
         )
+
+
+# Match SVG path command letters (any letter, so unsupported ones can be
+# diagnosed) and signed/exponent-form numbers.
+_SVG_TOKEN_RE = __import__("re").compile(
+    r"[A-Za-z]|-?\d*\.?\d+(?:[eE][+-]?\d+)?"
+)
+
+
+def _svg_to_ooxml_motion_path(
+    svg: str,
+    *,
+    viewbox: tuple[float, float, float, float] | None = None,
+) -> str:
+    """Convert an SVG path string into an OOXML motion-path expression.
+
+    Supports M/m, L/l, H/h, V/v, C/c, Q/q, Z/z.  The resulting OOXML
+    path is rebased so the first moveto becomes ``M 0 0`` (PowerPoint
+    motion-paths are relative to the shape's starting position) and
+    coordinates are mapped from *viewbox* into the unit square.
+
+    When *viewbox* is ``None`` the path is assumed to already live in
+    the unit square ``(0, 0, 1, 1)`` — the OOXML coordinate system —
+    which is convenient for hand-authored paths.
+    """
+    if not svg or not svg.strip():
+        raise ValueError("svg path must be a non-empty string")
+
+    if viewbox is None:
+        vb_x, vb_y, vb_w, vb_h = 0.0, 0.0, 1.0, 1.0
+    else:
+        vb_x, vb_y, vb_w, vb_h = (float(v) for v in viewbox)
+    if vb_w <= 0 or vb_h <= 0:
+        raise ValueError(
+            "viewbox width and height must be positive; got "
+            f"{viewbox!r}"
+        )
+
+    tokens = _SVG_TOKEN_RE.findall(svg)
+    if not tokens:
+        raise ValueError(f"no recognisable commands in svg path {svg!r}")
+
+    out_parts: list[str] = []
+    # Track the SVG-coord cursor (cx, cy), the rebase origin (origin_x,
+    # origin_y) — i.e. where the first moveto landed in SVG coords —
+    # and the most-recent subpath start for ``Z`` closure.
+    cx = cy = 0.0
+    origin_x: float | None = None
+    origin_y: float | None = None
+    subpath_x = subpath_y = 0.0
+    started = False
+
+    def _emit(letter: str, *coords: float) -> None:
+        # Translate (cx, cy) in SVG coords to OOXML unit-square coords
+        # relative to the rebase origin.  ``g`` formatting keeps
+        # ``-0`` from sneaking in.
+        out_parts.append(letter)
+        for c in coords:
+            out_parts.append(f"{c:g}")
+
+    def _to_ooxml(x: float, y: float) -> tuple[float, float]:
+        # Rebase to origin then map viewbox → unit square.
+        assert origin_x is not None and origin_y is not None
+        return (x - origin_x) / vb_w, (y - origin_y) / vb_h
+
+    i = 0
+    cmd: str = ""
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.isalpha():
+            cmd = tok
+            i += 1
+        # H / V take a single number; Z takes none.
+        if cmd in ("Z", "z"):
+            # Close current subpath: SVG draws a line back to the
+            # subpath origin.
+            cx, cy = subpath_x, subpath_y
+            ox, oy = _to_ooxml(cx, cy)
+            _emit("L", ox, oy)
+            continue
+        try:
+            n = float(tokens[i])
+        except (IndexError, ValueError):
+            raise ValueError(
+                f"expected coordinate after {cmd!r} in svg path {svg!r}"
+            )
+        i += 1
+
+        if cmd in ("M", "m"):
+            # First number is the new cursor; subsequent number-pairs
+            # under the same M command are implicit linetos.
+            try:
+                m = float(tokens[i])
+            except (IndexError, ValueError):
+                raise ValueError(
+                    f"expected y after x in moveto in svg path {svg!r}"
+                )
+            i += 1
+            new_x = n if cmd == "M" else cx + n
+            new_y = m if cmd == "M" else cy + m
+            if not started:
+                origin_x, origin_y = new_x, new_y
+                subpath_x, subpath_y = new_x, new_y
+                cx, cy = new_x, new_y
+                _emit("M", 0.0, 0.0)
+                started = True
+            else:
+                cx, cy = new_x, new_y
+                subpath_x, subpath_y = new_x, new_y
+                ox, oy = _to_ooxml(cx, cy)
+                _emit("M", ox, oy)
+            # Implicit lineto continuation: M behaves as L for
+            # subsequent coord pairs.
+            cmd = "L" if cmd == "M" else "l"
+            continue
+
+        if not started:
+            # Any non-M command must be preceded by a moveto in valid SVG.
+            raise ValueError(
+                f"svg path must start with M/m; got {cmd!r} in {svg!r}"
+            )
+
+        if cmd in ("L", "l"):
+            try:
+                m = float(tokens[i])
+            except (IndexError, ValueError):
+                raise ValueError(
+                    f"expected y after x in lineto in svg path {svg!r}"
+                )
+            i += 1
+            cx = n if cmd == "L" else cx + n
+            cy = m if cmd == "L" else cy + m
+            ox, oy = _to_ooxml(cx, cy)
+            _emit("L", ox, oy)
+        elif cmd in ("H", "h"):
+            cx = n if cmd == "H" else cx + n
+            ox, oy = _to_ooxml(cx, cy)
+            _emit("L", ox, oy)
+        elif cmd in ("V", "v"):
+            cy = n if cmd == "V" else cy + n
+            ox, oy = _to_ooxml(cx, cy)
+            _emit("L", ox, oy)
+        elif cmd in ("C", "c"):
+            # Cubic: x1 y1 x2 y2 x y
+            try:
+                pts = [n] + [float(tokens[i + k]) for k in range(5)]
+            except (IndexError, ValueError):
+                raise ValueError(
+                    f"cubic curve needs 6 coords in svg path {svg!r}"
+                )
+            i += 5
+            x1, y1, x2, y2, x, y = pts
+            if cmd == "c":
+                x1 += cx; y1 += cy
+                x2 += cx; y2 += cy
+                x += cx; y += cy
+            cx, cy = x, y
+            o1x, o1y = _to_ooxml(x1, y1)
+            o2x, o2y = _to_ooxml(x2, y2)
+            ox, oy = _to_ooxml(x, y)
+            _emit("C", o1x, o1y, o2x, o2y, ox, oy)
+        elif cmd in ("Q", "q"):
+            # Quadratic: x1 y1 x y
+            try:
+                pts = [n] + [float(tokens[i + k]) for k in range(3)]
+            except (IndexError, ValueError):
+                raise ValueError(
+                    f"quadratic curve needs 4 coords in svg path {svg!r}"
+                )
+            i += 3
+            x1, y1, x, y = pts
+            if cmd == "q":
+                x1 += cx; y1 += cy
+                x += cx; y += cy
+            cx, cy = x, y
+            o1x, o1y = _to_ooxml(x1, y1)
+            ox, oy = _to_ooxml(x, y)
+            _emit("Q", o1x, o1y, ox, oy)
+        else:
+            raise ValueError(
+                f"unsupported svg path command {cmd!r}; supported: "
+                "M/m L/l H/h V/v C/c Q/q Z/z"
+            )
+
+    out_parts.append("E")
+    return " ".join(out_parts)
 
 
 def _slide_dimensions_emu(slide: Slide) -> tuple[int, int]:
