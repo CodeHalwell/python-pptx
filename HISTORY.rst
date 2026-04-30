@@ -14,8 +14,8 @@ installs the ``pptx`` import name) is also present in the environment.
 .. _`scanny/python-pptx`: https://github.com/scanny/python-pptx
 
 
-Unreleased
-++++++++++
+2.4.0 (2026-04-30)
+++++++++++++++++++
 
 Animation ergonomics, gradient/alpha discoverability, recipe bug fixes,
 and a bundled Claude skill.  All additive; nothing removed.
