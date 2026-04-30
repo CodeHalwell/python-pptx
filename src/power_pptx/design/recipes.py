@@ -1405,30 +1405,35 @@ def _is_markup_string(value: Any) -> bool:
     whose ``/`` characters would otherwise mis-route the figure to
     :meth:`add_picture` and raise :class:`FileNotFoundError`.
 
-    The detection is deliberately conservative: a leading ``<`` followed
-    by a tag name or XML declaration is taken as markup.  Falls back to
-    the path heuristic only when the value doesn't look like markup at
-    all.
+    Recognised markup forms:
+
+    * ``<?xml`` declarations
+    * ``<!DOCTYPE`` declarations
+    * ``<!--`` comments
+    * ``<svg``, ``<html``, or any other ``<tagname`` opening tag
+    * ``</tagname>`` closing tags
+
+    Anything else starting with ``<`` (e.g. an exotic filename) falls
+    through to the path heuristic.
     """
     if not isinstance(value, str):
         return False
     s = value.lstrip()
     if not s.startswith("<"):
         return False
-    # Anything that looks like an XML declaration, an SVG/HTML tag, or
-    # a tag-like ``<name`` is treated as markup regardless of any ``/``
-    # characters further down (which would normally signal a path).
-    if s.startswith(("<?xml", "<!DOCTYPE", "<svg", "<html")):
+    # XML declarations, doctypes, comments.
+    if s.startswith(("<?xml", "<!DOCTYPE", "<!--", "<svg", "<html")):
         return True
-    # Generic ``<tagname`` where tagname starts with an ASCII letter.
-    if len(s) >= 2 and s[1].isalpha():
+    # ``<tagname`` (opening) or ``</tagname>`` (closing) — both are
+    # markup; differentiate from a stray ``<`` in a filename by
+    # requiring an ASCII letter after the optional ``/``.
+    rest = s[2:] if s.startswith("</") else s[1:]
+    if rest and rest[0].isalpha():
         return True
-    # Fallback: starts with ``<`` but no recognisable tag — treat as
-    # path (rare on real input, but preserves the historical behaviour
-    # for the corner case of weird filenames).
-    if os.sep in value or "/" in value:
-        return False
-    return True
+    # Truly unrecognised ``<…``: treat as a path (rare on real input,
+    # but preserves the historical behaviour for the corner case of
+    # weird filenames that happen to start with ``<``).
+    return False
 
 
 # ---------------------------------------------------------------------------

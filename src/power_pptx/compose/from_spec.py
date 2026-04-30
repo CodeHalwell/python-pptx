@@ -388,7 +388,10 @@ def _set_subtitle_or_body(slide: Any, spec: dict[str, Any], layout_name: str) ->
         if kpis:
             _add_kpi_shapes(slide, kpis)
 
-    elif layout_name in ("two_column", "comparison"):
+    elif layout_name in ("two_column", "comparison_layout"):
+        # Note: ``comparison`` (bare) routes to the recipe earlier in the
+        # dispatcher and never reaches this branch.  ``comparison_layout``
+        # is the placeholder-based opt-in that does.
         left = spec.get("left") or spec.get("content_left")
         right = spec.get("right") or spec.get("content_right")
         if left:

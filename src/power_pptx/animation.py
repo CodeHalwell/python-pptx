@@ -935,24 +935,30 @@ class SlideAnimations:
         uses the group's ``start`` trigger and subsequent effects default
         to ``Trigger.WITH_PREVIOUS`` so the whole cluster animates as
         one unit.
+
+        Counters bump on **every** call inside a block, even when the
+        caller supplied an explicit trigger.  Otherwise an explicit
+        trigger on the first effect would let the *next* unset-trigger
+        effect get the "first effect" treatment instead of being
+        ``WITH_PREVIOUS`` / ``AFTER_PREVIOUS`` as documented.
         """
+        if self._grp_active:
+            is_first = self._grp_count == 0
+            self._grp_count += 1
+            if trigger is not _TRIGGER_UNSET:
+                return trigger
+            return self._grp_start if is_first else PP_ANIM_TRIGGER.WITH_PREVIOUS
+        if self._seq_active:
+            is_first = self._seq_count == 0
+            self._seq_count += 1
+            if trigger is not _TRIGGER_UNSET:
+                return trigger
+            return self._seq_start if is_first else PP_ANIM_TRIGGER.AFTER_PREVIOUS
         if trigger is not _TRIGGER_UNSET:
             return trigger
-        if self._grp_active:
-            if self._grp_count == 0:
-                self._grp_count += 1
-                return self._grp_start
-            self._grp_count += 1
-            return PP_ANIM_TRIGGER.WITH_PREVIOUS
-        if not self._seq_active:
-            return PP_ANIM_TRIGGER.ON_CLICK
-        if self._seq_count == 0:
-            self._seq_count += 1
-            return self._seq_start
-        self._seq_count += 1
-        return PP_ANIM_TRIGGER.AFTER_PREVIOUS
+        return PP_ANIM_TRIGGER.ON_CLICK
 
-    def _consume_sequence_delay(self, delay: int) -> int:
+    def _consume_block_delay(self, delay: int) -> int:
         """Add the active sequence/group ``delay`` to the first effect's *delay*.
 
         ``sequence(delay=N)`` and ``group(delay=N)`` shift the whole
@@ -986,7 +992,7 @@ class SlideAnimations:
         root_ctn = self._get_or_create_root_ctn()
 
         trigger = self._resolve_default_trigger(trigger)
-        delay = self._consume_sequence_delay(delay)
+        delay = self._consume_block_delay(delay)
         grp_id, node_type, wrapper_delay = self._resolve_trigger(trigger)
 
         indent_behaviors = "\n".join(
@@ -1288,12 +1294,25 @@ class AnimationEntry:
 
     @property
     def shape(self) -> Any:
+        """Look up the live |BaseShape| for this entry on its slide.
+
+        Walks the slide's spTree elements directly to locate the shape
+        with a matching id and only then constructs a proxy — so the
+        cost is one proxy construction per access, not ``N`` (where
+        ``N`` is the number of shapes on the slide).  Returns ``None``
+        when the shape has been deleted.  Callers iterating many
+        entries on a dense slide can still build their own
+        ``shape_id`` → shape map from a single ``slide.shapes`` walk
+        if they want to amortise across accesses.
+        """
         spid = self.shape_id
         if spid is None:
             return None
-        for s in self._slide.shapes:
-            if getattr(s, "shape_id", None) == spid:
-                return s
+        shapes = self._slide.shapes
+        for shape_elm in shapes._iter_member_elms():
+            elm_id = getattr(shape_elm, "shape_id", None)
+            if elm_id == spid:
+                return shapes._shape_factory(shape_elm)
         return None
 
     @property

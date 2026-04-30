@@ -611,3 +611,43 @@ class DescribeAnimationsIntrospection:
         first.remove()
         assert len(slide.animations) == 1
         assert next(iter(slide.animations)).shape_id == b.shape_id
+
+
+class DescribeBlockTriggerCounting:
+    """Explicit triggers inside group()/sequence() still consume a slot.
+
+    Regression for: when the *first* effect inside a group() or sequence()
+    block sets ``trigger=`` explicitly, the *next* unset-trigger effect
+    must still default to WITH_PREVIOUS / AFTER_PREVIOUS — not be treated
+    as if it were itself the first effect of the block.
+    """
+
+    def it_treats_subsequent_unset_trigger_as_with_previous_in_group(self):
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        a = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(1))
+        b = slide.shapes.add_shape(1, Inches(1), Inches(2.5), Inches(2), Inches(1))
+        c = slide.shapes.add_shape(1, Inches(1), Inches(4), Inches(2), Inches(1))
+
+        with slide.animations.group():
+            Entrance.fade(slide, a, trigger=Trigger.ON_CLICK)  # explicit
+            Entrance.fade(slide, b)  # must be WITH_PREVIOUS, not AFTER_PREVIOUS
+            Entrance.fade(slide, c)
+
+        node_types = [nt for nt in _ctn_node_types(slide) if nt != "tmRoot"]
+        assert node_types == ["clickEffect", "withEffect", "withEffect"]
+
+    def it_treats_subsequent_unset_trigger_as_after_previous_in_sequence(self):
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        a = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(2), Inches(1))
+        b = slide.shapes.add_shape(1, Inches(1), Inches(2.5), Inches(2), Inches(1))
+        c = slide.shapes.add_shape(1, Inches(1), Inches(4), Inches(2), Inches(1))
+
+        with slide.animations.sequence():
+            Entrance.fade(slide, a, trigger=Trigger.WITH_PREVIOUS)  # explicit
+            Entrance.fade(slide, b)  # must be AFTER_PREVIOUS
+            Entrance.fade(slide, c)
+
+        node_types = [nt for nt in _ctn_node_types(slide) if nt != "tmRoot"]
+        assert node_types == ["withEffect", "afterEffect", "afterEffect"]

@@ -244,25 +244,12 @@ class FillFormat(object):
             raise ValueError("linear_gradient requires at least two stops")
 
         self.gradient("linear")
-        # GradientStops doesn't expose append/clear publicly, so we mutate
-        # the underlying XML to fit `pairs` exactly.  The `gradient()` call
-        # above guarantees at least two stops to start from.
-        existing = list(self.gradient_stops)
-        for i, (color, position) in enumerate(pairs):
-            if i < len(existing):
-                stop = existing[i]
-            else:
-                last_xml = existing[-1]._gs  # type: ignore[attr-defined]
-                new_xml = copy.deepcopy(last_xml)
-                last_xml.addnext(new_xml)
-                existing = list(self.gradient_stops)
-                stop = existing[i]
-            stop.position = float(position)
-            stop.color.rgb = _coerce_color(color)
-        for stop in existing[len(pairs):]:
-            xml = stop._gs  # type: ignore[attr-defined]
-            xml.getparent().remove(xml)
-
+        # Defer to the public, atomically-validated GradientStops.replace().
+        # ``replace`` expects ``(position, color)`` while we built
+        # ``(color, position)`` to match the public API; flip the tuples here.
+        # ``replace`` accepts hex strings / RGBColor / 3-tuples natively, so
+        # no extra coercion step is needed.
+        self.gradient_stops.replace([(position, color) for color, position in pairs])
         self.gradient_angle = float(angle)
 
     @property

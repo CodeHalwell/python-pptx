@@ -656,3 +656,31 @@ class DescribeIsMarkupString:
         assert _is_markup_string(42) is False
         assert _is_markup_string(b"<svg/>") is False
         assert _is_markup_string("") is False
+
+
+class DescribeIsMarkupStringAdditional:
+    """Additional cases that motivated the second pass on `_is_markup_string`."""
+
+    def it_recognises_a_closing_tag(self):
+        from power_pptx.design.recipes import _is_markup_string
+
+        # `</tagname>` starts with `<` then `/` then a letter — markup.
+        assert _is_markup_string("</svg>") is True
+
+    def it_recognises_a_doctype_declaration(self):
+        from power_pptx.design.recipes import _is_markup_string
+
+        assert _is_markup_string("<!DOCTYPE html>") is True
+
+    def it_recognises_an_xml_comment(self):
+        from power_pptx.design.recipes import _is_markup_string
+
+        assert _is_markup_string("<!-- comment -->") is True
+
+    def it_falls_back_to_path_for_unrecognised_lt_prefix(self):
+        from power_pptx.design.recipes import _is_markup_string
+
+        # `<` followed by a non-letter and no recognised XML/doctype/comment
+        # pattern is treated as a path (preserves docstring intent).
+        assert _is_markup_string("<<<weird") is False
+        assert _is_markup_string("<1file") is False

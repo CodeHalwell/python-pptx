@@ -263,3 +263,28 @@ class DescribeComparisonLayoutAlias:
         }
         prs = from_spec(spec)
         assert len(prs.slides) == 1
+
+
+class DescribeComparisonLayoutPlaceholders:
+    """`comparison_layout` (the placeholder-based opt-in) populates left/right."""
+
+    def it_populates_left_and_right_placeholders(self):
+        from power_pptx.compose.from_spec import from_spec
+
+        spec = {
+            "slides": [
+                {
+                    "layout": "comparison_layout",
+                    "title": "A vs B",
+                    "left": "Faster",
+                    "right": "Cheaper",
+                }
+            ]
+        }
+        prs = from_spec(spec)
+        slide = prs.slides[0]
+        # Find any placeholder containing the strings — the exact placeholder
+        # idx layout is template-dependent, but the values must land somewhere.
+        texts = [ph.text for ph in slide.placeholders]
+        assert any("Faster" in t for t in texts)
+        assert any("Cheaper" in t for t in texts)
