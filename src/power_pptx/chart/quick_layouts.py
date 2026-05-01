@@ -226,12 +226,15 @@ _LEGEND_POSITION_NAMES = {
 
 
 def _coerce_legend_position(value: Any) -> XL_LEGEND_POSITION:
-    """Accept either an :class:`XL_LEGEND_POSITION` member or its lowercase name.
+    """Accept an :class:`XL_LEGEND_POSITION` member, int value, or lowercase name.
 
     The reference docs were inconsistent about which form was canonical
     (``"bottom"`` in prose, ``XL_LEGEND_POSITION.BOTTOM`` in code).
-    Accept both at the boundary so neither footgun bites.  Unknown
-    strings raise :class:`ValueError` listing the supported names.
+    Accept both at the boundary, plus the historical integer form
+    (``-4107`` etc.) that ``Legend.position`` already supported via
+    ``XL_LEGEND_POSITION.to_xml``, so config-driven layouts that
+    serialised enum values as ints keep working.  Unknown strings or
+    out-of-range integers raise :class:`ValueError`.
     """
     if isinstance(value, XL_LEGEND_POSITION):
         return value
@@ -243,9 +246,21 @@ def _coerce_legend_position(value: Any) -> XL_LEGEND_POSITION:
                 "legend_position string must be one of %s; got %r"
                 % (sorted(_LEGEND_POSITION_NAMES), value)
             ) from None
+    # ``bool`` is a subclass of ``int`` — guard explicitly so
+    # ``legend_position=True`` doesn't silently resolve to whichever
+    # member happens to have value 1.
+    if isinstance(value, int) and not isinstance(value, bool):
+        try:
+            return XL_LEGEND_POSITION(value)
+        except ValueError:
+            raise ValueError(
+                "legend_position int %r is not a valid XL_LEGEND_POSITION "
+                "value" % value
+            ) from None
     raise TypeError(
-        "legend_position must be an XL_LEGEND_POSITION member or string "
-        "name (one of %s); got %r" % (sorted(_LEGEND_POSITION_NAMES), value)
+        "legend_position must be an XL_LEGEND_POSITION member, int value, "
+        "or string name (one of %s); got %r"
+        % (sorted(_LEGEND_POSITION_NAMES), value)
     )
 
 

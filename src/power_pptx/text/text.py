@@ -232,8 +232,20 @@ class TextFrame(Subshape):
                 font.bold = bold
             if italic is not None and font.italic is None:
                 font.italic = italic
-            if rgb is not None and font.color.rgb is None:
-                font.color.rgb = rgb
+            if rgb is not None:
+                # Don't read ``font.color.rgb`` first — that raises
+                # ``AttributeError`` for runs with an explicit non-RGB
+                # color (e.g. ``theme_color`` / scheme colour), which
+                # would crash the helper on mixed-format frames.  Use
+                # ``font.color.type`` as the "is anything set?" probe
+                # instead; ``None`` means no explicit colour, scheme /
+                # RGB / preset / system means leave it alone.
+                try:
+                    color_type = font.color.type
+                except AttributeError:
+                    color_type = None
+                if color_type is None:
+                    font.color.rgb = rgb
 
         for paragraph in self.paragraphs:
             # The paragraph-level Font controls run defaults via

@@ -490,6 +490,44 @@ class DescribeOffGridDrift:
         assert report.issues == before
 
 
+class DescribeSetParagraphDefaults:
+    """Regression tests for IMPROVEMENT_PLAN.md item 8 + PR #27 review."""
+
+    def it_does_not_crash_on_runs_with_an_explicit_theme_color(self):
+        # Regression for codex review on PR #27: reading
+        # ``font.color.rgb`` to decide whether a run is unset crashes
+        # with ``AttributeError`` for runs that have an explicit
+        # non-RGB colour (e.g. ``theme_color``).  ``set_paragraph_defaults``
+        # must use ``font.color.type`` as the "is anything set?" probe
+        # so mixed-format text frames work.
+        from power_pptx.dml.color import RGBColor
+        from power_pptx.enum.dml import MSO_THEME_COLOR
+        from power_pptx.util import Pt
+
+        _, slide = _new_blank_slide()
+        box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(2))
+        tf = box.text_frame
+        tf.text = "themed\nplain"
+        # First run has an explicit theme colour; second is unset.
+        tf.paragraphs[0].runs[0].font.color.theme_color = MSO_THEME_COLOR.ACCENT_1
+
+        # No exception.
+        tf.set_paragraph_defaults(font_name="Inter", size=Pt(14), color="#222222")
+
+        # Theme colour preserved on run 0.
+        assert (
+            tf.paragraphs[0].runs[0].font.color.theme_color
+            == MSO_THEME_COLOR.ACCENT_1
+        )
+        # Default colour applied on the unset run.
+        assert tf.paragraphs[1].runs[0].font.color.rgb == RGBColor(
+            0x22, 0x22, 0x22
+        )
+        # And the font name was filled in everywhere.
+        assert tf.paragraphs[0].runs[0].font.name == "Inter"
+        assert tf.paragraphs[1].runs[0].font.name == "Inter"
+
+
 class DescribeAutoFixTextOverflow:
     """Regression tests for IMPROVEMENT_PLAN.md item 4.
 

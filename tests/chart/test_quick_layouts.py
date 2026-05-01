@@ -167,6 +167,28 @@ class DescribeApplyQuickLayout:
                 chart, {"has_legend": True, "legend_position": "diagonal"}
             )
 
+    def it_accepts_legend_position_as_integer_value(self):
+        # Regression for codex review on PR #27: ``legend.position``
+        # historically accepted both enum members and their integer
+        # values (via ``XL_LEGEND_POSITION.to_xml``).  Config-driven
+        # layouts that serialise enum values as ints must keep working.
+        chart = _make_column_chart()
+
+        apply_quick_layout(
+            chart,
+            {"has_legend": True, "legend_position": int(XL_LEGEND_POSITION.BOTTOM)},
+        )
+
+        assert chart.legend.position == XL_LEGEND_POSITION.BOTTOM
+
+    def it_rejects_out_of_range_legend_position_integers(self):
+        chart = _make_column_chart()
+
+        with pytest.raises(ValueError, match="not a valid XL_LEGEND_POSITION"):
+            apply_quick_layout(
+                chart, {"has_legend": True, "legend_position": 99999}
+            )
+
 
 class DescribeLayoutNames:
     def it_returns_all_built_in_names(self):
