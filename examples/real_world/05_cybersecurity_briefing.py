@@ -211,7 +211,9 @@ def _incidents_table(prs) -> None:
         cell.vertical_anchor = MSO_VERTICAL_ANCHOR.MIDDLE
 
     sev_color = {
-        "S1": "#DC2626", "S2": "#F59E0B", "S3": "#16A34A",
+        "S1": TOKENS.palette["negative"],
+        "S2": TOKENS.palette["accent"],
+        "S3": TOKENS.palette["positive"],
     }
     for r, row in enumerate(rows[1:], start=1):
         for c, value in enumerate(row):

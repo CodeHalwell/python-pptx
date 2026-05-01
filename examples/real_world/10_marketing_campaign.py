@@ -234,9 +234,9 @@ def _channel_mix(prs) -> None:
         data,
     ).chart
     series = chart.series[0]
-    for point, hexc in zip(series.points, PALETTE):
+    for i, point in enumerate(series.points):
         point.format.fill.solid()
-        point.format.fill.fore_color.rgb = hex_rgb(hexc)
+        point.format.fill.fore_color.rgb = hex_rgb(PALETTE[i % len(PALETTE)])
     chart.apply_quick_layout("title_no_legend")
     chart.chart_title.text_frame.text = "FY27 spend by channel ($M)"
 
