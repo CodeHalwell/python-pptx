@@ -78,7 +78,7 @@ def build(out: Path) -> None:
     footer(prs.slides[-1], FOOTER, "2", TOKENS)
 
     _segmentation(prs)
-    _big_idea(prs)
+    big_idea_slide = _big_idea(prs)
     _channel_mix(prs)
     _funnel(prs)
     _calendar(prs)
@@ -92,8 +92,12 @@ def build(out: Path) -> None:
         tokens=TOKENS,
     )
 
-    # Deck-wide subtle fade with Morph on big-idea reveal.
+    # Apply the deck-wide fade FIRST, then override the big-idea slide
+    # with Morph — set_transition iterates every slide and would otherwise
+    # clobber the per-slide override.
     prs.set_transition(kind=MSO_TRANSITION_TYPE.FADE, duration=400)
+    big_idea_slide.transition.kind = MSO_TRANSITION_TYPE.MORPH
+    big_idea_slide.transition.duration = 1200
 
     lint_or_die(prs)
     prs.save(out)
@@ -163,7 +167,7 @@ def _segmentation(prs) -> None:
     footer(slide, FOOTER, "3", TOKENS)
 
 
-def _big_idea(prs) -> None:
+def _big_idea(prs):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     bg = slide.shapes.add_shape(
         MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(13.333), Inches(7.5),
@@ -209,8 +213,8 @@ def _big_idea(prs) -> None:
 
     Entrance.fade(slide, head)
     Entrance.fade(slide, sub, trigger=Trigger.AFTER_PREVIOUS)
-    slide.transition.kind = MSO_TRANSITION_TYPE.MORPH
-    slide.transition.duration = 1200
+    # Caller applies the Morph override AFTER the deck-wide set_transition.
+    return slide
 
 
 def _channel_mix(prs) -> None:

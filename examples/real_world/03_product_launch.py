@@ -67,7 +67,7 @@ def build(out: Path) -> None:
     )
 
     _the_problem(prs)
-    _introducing(prs)
+    intro_slide = _introducing(prs)
     _whats_new(prs)
 
     kpi_slide(
@@ -103,8 +103,12 @@ def build(out: Path) -> None:
         tokens=TOKENS,
     )
 
-    # Add a deck-wide subtle fade transition + Morph between cover and pillars.
+    # Apply the deck-wide fade FIRST, then override the introducing slide
+    # with Morph — set_transition iterates every slide and would otherwise
+    # clobber the per-slide override.
     prs.set_transition(kind=MSO_TRANSITION_TYPE.FADE, duration=400)
+    intro_slide.transition.kind = MSO_TRANSITION_TYPE.MORPH
+    intro_slide.transition.duration = 1200
 
     lint_or_die(prs)
     prs.save(out)
@@ -162,7 +166,7 @@ def _the_problem(prs) -> None:
     footer(slide, FOOTER, "2", TOKENS)
 
 
-def _introducing(prs) -> None:
+def _introducing(prs):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
 
     # Full-bleed gradient backdrop
@@ -240,9 +244,8 @@ def _introducing(prs) -> None:
     with slide.animations.sequence():
         Entrance.fade(slide, title, trigger=Trigger.WITH_PREVIOUS)
         Entrance.fade(slide, sub)
-    # Make sure this slide uses Morph in a deck that's otherwise fade.
-    slide.transition.kind = MSO_TRANSITION_TYPE.MORPH
-    slide.transition.duration = 1200
+    # Caller applies the Morph override AFTER the deck-wide set_transition.
+    return slide
 
 
 def _whats_new(prs) -> None:
