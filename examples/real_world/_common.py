@@ -55,7 +55,7 @@ def hex_rgb(value) -> RGBColor:
     """Accept hex strings ('#RRGGBB' / 'RRGGBB') or RGBColor instances."""
     if isinstance(value, RGBColor):
         return value
-    return RGBColor.from_string(value.lstrip("#"))
+    return RGBColor.from_hex(value)
 
 
 def section_title(slide, text: str, tokens: DesignTokens, *, top: float = 0.55) -> None:

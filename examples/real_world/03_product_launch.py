@@ -45,7 +45,6 @@ from _common import (
     new_deck,
     section_title,
     styled_card,
-    write_card_text,
 )
 
 FOOTER = "Atlas Cloud Console 4.0  |  Launch Day Briefing  |  May 2026"

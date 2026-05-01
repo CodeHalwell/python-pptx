@@ -26,7 +26,7 @@ from power_pptx.chart.data import CategoryChartData
 from power_pptx.design.recipes import kpi_slide, quote_slide
 from power_pptx.enum.chart import XL_CHART_TYPE
 from power_pptx.enum.shapes import MSO_SHAPE
-from power_pptx.enum.text import MSO_AUTO_SIZE, MSO_VERTICAL_ANCHOR, PP_ALIGN
+from power_pptx.enum.text import MSO_VERTICAL_ANCHOR
 from power_pptx.util import Inches, Pt
 
 from _brand import PEOPLE as TOKENS, PEOPLE_PALETTE as PALETTE

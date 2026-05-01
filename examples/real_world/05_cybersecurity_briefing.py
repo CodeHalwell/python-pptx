@@ -32,7 +32,6 @@ from power_pptx.util import Inches, Pt
 
 from _brand import SECURITY as TOKENS, SECURITY_PALETTE as PALETTE
 from _common import (
-    closing_slide,
     cover_slide,
     divider,
     eyebrow,
