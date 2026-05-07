@@ -113,6 +113,10 @@ class DescribeAnchorOnAddShape:
 
     def it_centres_a_shape_inside_a_parent_shape_container(self):
         # A common pattern: drop a label into the centre of a card.
+        # Shapes added via slide.shapes.add_* always live in the
+        # slide's spTree (slide-relative coordinates); the anchor
+        # helper must add the container's left/top so the new shape
+        # is *visually* inside the parent shape.
         prs, slide = _slide()
         card = slide.shapes.add_shape(
             MSO_SHAPE.ROUNDED_RECTANGLE,
@@ -121,12 +125,31 @@ class DescribeAnchorOnAddShape:
             Inches(4),
             Inches(2),
         )
+        label = slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE,
+            Inches(0),
+            Inches(0),
+            Inches(1),
+            Inches(0.4),
+            anchor="center",
+            container=card,
+        )
+        # Label sits in the card's centre, slide-relative.
+        expected_left = int(card.left) + (int(card.width) - int(Inches(1))) // 2
+        expected_top = int(card.top) + (int(card.height) - int(Inches(0.4))) // 2
+        assert int(label.left) == expected_left
+        assert int(label.top) == expected_top
+
+    def it_treats_a_synthetic_size_only_container_as_origin_zero(self):
+        # When the container exposes only width/height (no left/top),
+        # we keep the previous "container origin = (0, 0)" behaviour
+        # so callers can still compute anchor positions against a
+        # virtual size without contriving fake left/top.
+        prs, slide = _slide()
 
         class _BoxLike:
-            # Stand-in for a parent-shape-with-coords; the helper only
-            # uses .width/.height.
-            width = card.width
-            height = card.height
+            width = Inches(4)
+            height = Inches(2)
 
         label = slide.shapes.add_shape(
             MSO_SHAPE.RECTANGLE,
@@ -137,10 +160,8 @@ class DescribeAnchorOnAddShape:
             anchor="center",
             container=_BoxLike(),
         )
-        # The label is positioned in the *container's* coordinate
-        # system (0..card.width), so left/top are in card-local EMU.
-        assert int(label.left) == (int(card.width) - int(Inches(1))) // 2
-        assert int(label.top) == (int(card.height) - int(Inches(0.4))) // 2
+        assert int(label.left) == (int(Inches(4)) - int(Inches(1))) // 2
+        assert int(label.top) == (int(Inches(2)) - int(Inches(0.4))) // 2
 
     def it_leaves_position_alone_when_anchor_is_none(self):
         prs, slide = _slide()

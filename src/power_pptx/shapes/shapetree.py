@@ -153,32 +153,62 @@ def _compute_anchor_left_top(
     return (left, top)
 
 
-def _container_extents(shapetree, container) -> tuple[int, int]:
-    """Return the (width, height) of a positioning container in EMU.
+def _container_box(shapetree, container) -> tuple[int, int, int, int]:
+    """Return the slide-relative ``(left, top, width, height)`` of a container.
 
-    `container` may be ``None`` (use the slide), a slide-like object
-    exposing ``part.package.presentation_part``, or any object with
-    ``width`` and ``height`` attributes (e.g. a parent shape). Raises
-    ``ValueError`` if no usable extents can be derived.
+    Shapes added through ``slide.shapes.add_*`` always live in the
+    slide's ``<p:spTree>`` and therefore use slide-relative
+    coordinates; nesting a shape inside a parent shape on the slide
+    is purely *visual*, not structural. So when ``container`` is a
+    parent shape, we need both its position *and* its size to compute
+    correct anchor coordinates — otherwise "centre inside this card"
+    silently means "centre inside a card-sized box at the slide
+    origin", which is wrong for any container not at ``(0, 0)``.
+
+    `container` may be:
+
+    * ``None`` — use the slide; origin ``(0, 0)``, extents from
+      the presentation.
+    * A slide-like object exposing ``part.package.presentation_part``
+      — same as ``None``, but resolves through the supplied object.
+    * Any object with ``.width`` and ``.height`` attributes; if it
+      also exposes ``.left`` / ``.top`` (i.e. a real shape) those
+      are honoured, otherwise the origin defaults to ``(0, 0)``
+      (useful for synthetic / virtual containers).
+
+    Raises ``ValueError`` if no usable extents can be derived.
     """
     if container is None:
         prs = shapetree.part.package.presentation_part.presentation
-        return (int(prs.slide_width), int(prs.slide_height))
-    # Shape-like: width / height attributes.
+        return (0, 0, int(prs.slide_width), int(prs.slide_height))
+    # Shape-like: width / height attributes (with optional left / top).
     if hasattr(container, "width") and hasattr(container, "height"):
         w, h = container.width, container.height
         if w is not None and h is not None:
-            return (int(w), int(h))
+            left = getattr(container, "left", 0) or 0
+            top = getattr(container, "top", 0) or 0
+            return (int(left), int(top), int(w), int(h))
     # Slide-like: try the same path as the default branch.
     if hasattr(container, "part"):
         try:
             prs = container.part.package.presentation_part.presentation
-            return (int(prs.slide_width), int(prs.slide_height))
+            return (0, 0, int(prs.slide_width), int(prs.slide_height))
         except AttributeError:
             pass
     raise ValueError(
         "container must be None, a slide, or a shape with .width/.height"
     )
+
+
+def _container_extents(shapetree, container) -> tuple[int, int]:
+    """Back-compat wrapper — return ``(width, height)`` only.
+
+    Prefer :func:`_container_box` in new code; it also returns the
+    container's slide-relative origin, which the anchor helpers need
+    for non-origin containers.
+    """
+    _, _, w, h = _container_box(shapetree, container)
+    return (w, h)
 
 
 class _LintGroupScope:
@@ -634,12 +664,12 @@ class _BaseGroupShapes(_BaseShapes):
         self._recalculate_extents()
         picture = cast(Picture, self._shape_factory(pic))
         if anchor is not None:
-            cw, ch = _container_extents(self, container)
+            cl, ct, cw, ch = _container_box(self, container)
             new_left, new_top = _compute_anchor_left_top(
                 anchor, cw, ch, int(picture.width), int(picture.height), int(margin)
             )
-            picture.left = Emu(new_left)
-            picture.top = Emu(new_top)
+            picture.left = Emu(cl + new_left)
+            picture.top = Emu(ct + new_top)
         return picture
 
     def add_svg_picture(
@@ -731,12 +761,12 @@ class _BaseGroupShapes(_BaseShapes):
         self._recalculate_extents()
         shape = cast(Shape, self._shape_factory(sp))
         if anchor is not None:
-            cw, ch = _container_extents(self, container)
+            cl, ct, cw, ch = _container_box(self, container)
             new_left, new_top = _compute_anchor_left_top(
                 anchor, cw, ch, int(shape.width), int(shape.height), int(margin)
             )
-            shape.left = Emu(new_left)
-            shape.top = Emu(new_top)
+            shape.left = Emu(cl + new_left)
+            shape.top = Emu(ct + new_top)
         return shape
 
     def add_textbox(
@@ -761,12 +791,12 @@ class _BaseGroupShapes(_BaseShapes):
         self._recalculate_extents()
         textbox = cast(Shape, self._shape_factory(sp))
         if anchor is not None:
-            cw, ch = _container_extents(self, container)
+            cl, ct, cw, ch = _container_box(self, container)
             new_left, new_top = _compute_anchor_left_top(
                 anchor, cw, ch, int(textbox.width), int(textbox.height), int(margin)
             )
-            textbox.left = Emu(new_left)
-            textbox.top = Emu(new_top)
+            textbox.left = Emu(cl + new_left)
+            textbox.top = Emu(ct + new_top)
         return textbox
 
     def build_freeform(
