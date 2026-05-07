@@ -6,10 +6,18 @@ import pytest
 
 from power_pptx import Presentation
 from power_pptx.design.components import (
+    ArticleCard,
+    Gauge,
     KpiCard,
     ProgressBar,
+    StatStrip,
+    StatusPill,
+    add_article_card,
+    add_gauge,
     add_kpi_card,
     add_progress_bar,
+    add_stat_strip,
+    add_status_pill,
 )
 from power_pptx.design.tokens import DesignTokens
 from power_pptx.dml.color import RGBColor
@@ -189,3 +197,135 @@ class DescribeAddProgressBar:
         )
         assert bar.track.lint_group == bar.fill.lint_group
         assert bar.track.lint_group.startswith("progress_bar@")
+
+
+class DescribeAddGauge:
+    def it_creates_a_track_fill_and_target_tick(self, slide, tokens):
+        gauge = add_gauge(
+            slide,
+            left=Inches(1),
+            top=Inches(1),
+            width=Inches(4),
+            height=Inches(0.3),
+            fraction=0.62,
+            target=0.8,
+            tokens=tokens,
+        )
+        assert isinstance(gauge, Gauge)
+        assert gauge.track is not None
+        assert gauge.fill is not None
+        assert gauge.target_tick is not None
+
+    def it_omits_target_tick_when_target_is_None(self, slide, tokens):
+        gauge = add_gauge(
+            slide,
+            left=Inches(1),
+            top=Inches(1),
+            width=Inches(4),
+            height=Inches(0.3),
+            fraction=0.5,
+            tokens=tokens,
+        )
+        assert gauge.target_tick is None
+
+
+class DescribeAddStatusPill:
+    def it_returns_a_pill_and_label(self, slide, tokens):
+        pill = add_status_pill(
+            slide,
+            left=Inches(0.5),
+            top=Inches(0.5),
+            width=Inches(1.2),
+            height=Inches(0.35),
+            text="LIVE",
+            tokens=tokens,
+        )
+        assert isinstance(pill, StatusPill)
+        assert pill.pill is not None
+        assert pill.label is not None
+        assert (
+            pill.label.text_frame.paragraphs[0].runs[0].text == "LIVE"
+        )
+
+    def it_honours_explicit_accent(self, slide):
+        pill = add_status_pill(
+            slide,
+            left=Inches(0.5),
+            top=Inches(0.5),
+            width=Inches(1.2),
+            height=Inches(0.35),
+            text="DRAFT",
+            accent="#888888",
+        )
+        assert pill.pill.fill.fore_color.rgb == RGBColor(0x88, 0x88, 0x88)
+
+
+class DescribeAddStatStrip:
+    def it_lays_out_n_kpi_cards_across_the_strip(self, slide, tokens):
+        strip = add_stat_strip(
+            slide,
+            left=Inches(1),
+            top=Inches(1),
+            width=Inches(9),
+            height=Inches(1.9),
+            items=[
+                {"label": "ARR", "value": "$182M"},
+                {"label": "NDR", "value": "131%", "delta": +0.03},
+                {"label": "CAC", "value": "8 mo"},
+            ],
+            tokens=tokens,
+        )
+        assert isinstance(strip, StatStrip)
+        assert len(strip.cards) == 3
+        # First card sits at the strip's left edge.
+        first = strip.cards[0]
+        assert int(first.card.left) == int(Inches(1))
+        # Cards must not overlap each other (gutter > 0).
+        last = strip.cards[-1]
+        right_edge = int(last.card.left) + int(last.card.width)
+        assert right_edge <= int(Inches(1) + Inches(9)) + 1  # rounding tol
+
+    def it_returns_an_empty_strip_for_empty_items(self, slide, tokens):
+        strip = add_stat_strip(
+            slide,
+            left=Inches(1),
+            top=Inches(1),
+            width=Inches(9),
+            height=Inches(1.9),
+            items=[],
+            tokens=tokens,
+        )
+        assert strip.cards == []
+
+
+class DescribeAddArticleCard:
+    def it_creates_card_title_and_blurb(self, slide, tokens):
+        article = add_article_card(
+            slide,
+            left=Inches(1),
+            top=Inches(1),
+            width=Inches(4),
+            height=Inches(2.5),
+            title="Q4 customer wins",
+            blurb="Two flagship rollouts shipped this quarter.",
+            tokens=tokens,
+        )
+        assert isinstance(article, ArticleCard)
+        assert article.card is not None
+        # No CTA → cta is None.
+        assert article.cta is None
+
+    def it_renders_a_cta_pill_when_cta_text_supplied(self, slide, tokens):
+        article = add_article_card(
+            slide,
+            left=Inches(1),
+            top=Inches(1),
+            width=Inches(4),
+            height=Inches(2.5),
+            title="Read the case study",
+            blurb="Five-month rollout, 30% lift in qualified leads.",
+            cta_text="Read more",
+            tokens=tokens,
+        )
+        assert article.cta is not None
+        assert isinstance(article.cta, StatusPill)

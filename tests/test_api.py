@@ -32,8 +32,16 @@ class DescribePackageSurface:
             "FigureBackendUnavailable",
             "add_kpi_card",
             "add_progress_bar",
+            "add_gauge",
+            "add_status_pill",
+            "add_stat_strip",
+            "add_article_card",
             "KpiCard",
             "ProgressBar",
+            "Gauge",
+            "StatusPill",
+            "StatStrip",
+            "ArticleCard",
         ],
     )
     def it_exposes_each_documented_name_at_package_root(self, name):

@@ -52,7 +52,20 @@ if TYPE_CHECKING:
     from power_pptx.slide import Slide
 
 
-__all__ = ("KpiCard", "ProgressBar", "add_kpi_card", "add_progress_bar")
+__all__ = (
+    "KpiCard",
+    "ProgressBar",
+    "Gauge",
+    "StatusPill",
+    "StatStrip",
+    "ArticleCard",
+    "add_kpi_card",
+    "add_progress_bar",
+    "add_gauge",
+    "add_status_pill",
+    "add_stat_strip",
+    "add_article_card",
+)
 
 
 @dataclass
@@ -254,3 +267,316 @@ def _coerce_or_token(value, tokens, fallback_keys):
     from power_pptx._color import coerce_color
 
     return coerce_color(value)
+
+
+# ---------------------------------------------------------------------------
+# Linear gauge (fraction visualised as a slim horizontal bar with target tick)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Gauge:
+    """Bundle of shapes produced by :func:`add_gauge`.
+
+    A linear gauge is shaped like a progress bar but adds a small
+    target tick — useful for "62 of 80 target". The radial variant
+    is intentionally not implemented in this module: arc rendering
+    needs a freeform path and produces visibly different geometry
+    on PowerPoint vs LibreOffice.
+    """
+
+    track: Any
+    fill: Any
+    target_tick: Optional[Any]
+
+
+def add_gauge(
+    slide: "Slide",
+    *,
+    left: Length,
+    top: Length,
+    width: Length,
+    height: Length,
+    fraction: float,
+    target: Optional[float] = None,
+    tokens: Optional[DesignTokens] = None,
+    fill_color: Any = None,
+    track_color: Any = None,
+    target_color: Any = None,
+) -> Gauge:
+    """Add a linear gauge: progress bar plus optional target tick.
+
+    `fraction` and `target` are both ``[0.0, 1.0]`` (clamped). When
+    ``target`` is ``None`` no tick is drawn — the gauge degrades to a
+    lightly-styled progress bar so the same call can be used either way.
+    The tick is a thin vertical rectangle in the deck's ``negative``
+    palette slot (or red as a final fallback) so it stays legible
+    against the fill colour.
+    """
+    bar = add_progress_bar(
+        slide,
+        left=left,
+        top=top,
+        width=width,
+        height=height,
+        fraction=fraction,
+        tokens=tokens,
+        fill_color=fill_color,
+        track_color=track_color,
+    )
+    target_tick = None
+    if target is not None:
+        t = max(0.0, min(1.0, float(target)))
+        tick_w = max(int(Inches(0.04)), 1)  # ~3px on 96dpi
+        tick_x = Length(int(left) + int(round(int(width) * t)) - tick_w // 2)
+        target_tick = slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE,
+            tick_x,
+            Length(int(top) - int(Inches(0.04))),
+            Length(tick_w),
+            Length(int(height) + int(Inches(0.08))),
+        )
+        resolved = _coerce_or_token(target_color, tokens, ("negative", "danger"))
+        if resolved is None:
+            resolved = _coerce_or_token("#DD2233", None, ())
+        target_tick.fill.solid()
+        target_tick.fill.fore_color.rgb = resolved
+        target_tick.line.fill.background()
+        # Tag with the same lint group so the linter doesn't warn.
+        try:
+            target_tick.lint_group = bar.track.lint_group
+        except (AttributeError, NotImplementedError):
+            pass
+
+    return Gauge(track=bar.track, fill=bar.fill, target_tick=target_tick)
+
+
+# ---------------------------------------------------------------------------
+# Status pill — small coloured rounded rectangle with centred text
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class StatusPill:
+    pill: Any
+    label: Any
+
+
+def add_status_pill(
+    slide: "Slide",
+    *,
+    left: Length,
+    top: Length,
+    width: Length,
+    height: Length,
+    text: str,
+    accent: Any = None,
+    tokens: Optional[DesignTokens] = None,
+    text_color: Any = None,
+) -> StatusPill:
+    """Add a coloured pill-shape with centred label text.
+
+    `accent` controls the pill fill. When ``None``, falls back to the
+    token palette's ``accent`` slot, then ``primary``. ``text_color``
+    falls back to ``on_primary`` (or white) for contrast.
+    """
+    fill_rgb = _coerce_or_token(accent, tokens, ("accent", "primary", "neutral"))
+    if text_color is None:
+        text_rgb = _palette(tokens, ("on_primary",))
+        if text_rgb is None:
+            from power_pptx.dml.color import RGBColor
+
+            text_rgb = RGBColor(0xFF, 0xFF, 0xFF)
+    else:
+        from power_pptx._color import coerce_color
+
+        text_rgb = coerce_color(text_color)
+
+    pill = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
+    if fill_rgb is not None:
+        pill.fill.solid()
+        pill.fill.fore_color.rgb = fill_rgb
+    pill.line.fill.background()
+    pill.text_frame.text = ""
+
+    label = slide.shapes.add_textbox(left, top, width, height)
+    _fill_text_frame(
+        label.text_frame,
+        text,
+        token=_typography(tokens, "body", default_size=Pt(10), default_bold=True),
+        color=text_rgb,
+        align=PP_ALIGN.CENTER,
+        anchor=MSO_ANCHOR.MIDDLE,
+    )
+
+    group_name = f"status_pill@{int(left)},{int(top)}"
+    for shape in (pill, label):
+        try:
+            shape.lint_group = group_name
+        except (AttributeError, NotImplementedError):
+            pass
+
+    return StatusPill(pill=pill, label=label)
+
+
+# ---------------------------------------------------------------------------
+# Stat strip — n KPI tiles laid out across a bounding box with a gutter
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class StatStrip:
+    cards: list
+
+
+def add_stat_strip(
+    slide: "Slide",
+    *,
+    left: Length,
+    top: Length,
+    width: Length,
+    height: Length,
+    items: "list[Mapping[str, Any]]",
+    gutter: Length = Inches(0.25),
+    tokens: Optional[DesignTokens] = None,
+) -> StatStrip:
+    """Add ``len(items)`` KPI tiles across a strip with the given gutter.
+
+    Each item dict accepts the same fields as ``add_kpi_card``'s
+    ``label`` / ``value`` / ``delta``. Cards are sized to the strip's
+    width minus the gutters and stacked left-to-right.
+
+    Returns a :class:`StatStrip` whose ``.cards`` is a list of
+    :class:`KpiCard` bundles, in the same order as `items`.
+    """
+    if not items:
+        return StatStrip(cards=[])
+
+    n = len(items)
+    available = int(width) - (n - 1) * int(gutter)
+    card_w = Length(available // n)
+    cards = []
+    for i, kpi in enumerate(items):
+        l = Length(int(left) + i * (int(card_w) + int(gutter)))
+        delta = (
+            {"delta": kpi["delta"]}
+            if "delta" in kpi
+            else ({"delta_text": kpi["delta_text"]} if "delta_text" in kpi else None)
+        )
+        cards.append(
+            add_kpi_card(
+                slide,
+                left=l,
+                top=top,
+                width=card_w,
+                height=height,
+                label=str(kpi.get("label", "")),
+                value=str(kpi.get("value", "")),
+                delta=delta,
+                tokens=tokens,
+            )
+        )
+    return StatStrip(cards=cards)
+
+
+# ---------------------------------------------------------------------------
+# Article card — title + blurb with optional CTA pill
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ArticleCard:
+    card: Any
+    title_box: Any
+    blurb_box: Any
+    cta: Optional[StatusPill]
+
+
+def add_article_card(
+    slide: "Slide",
+    *,
+    left: Length,
+    top: Length,
+    width: Length,
+    height: Length,
+    title: str,
+    blurb: str = "",
+    cta_text: Optional[str] = None,
+    tokens: Optional[DesignTokens] = None,
+) -> ArticleCard:
+    """Add a brand-styled article card (title + blurb + optional CTA).
+
+    The card uses the same surface / muted / primary palette slots as
+    the slide-level recipes for visual consistency. The CTA, when
+    supplied, is rendered as a small :class:`StatusPill` anchored at
+    the card's bottom-left.
+    """
+    fill_color = _palette(tokens, ("surface", "lt2"))
+    border_color = _palette(tokens, ("muted", "lt1"))
+    title_color = _palette(tokens, ("primary", "neutral"))
+    blurb_color = _palette(tokens, ("muted", "neutral"))
+
+    card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
+    if fill_color is not None:
+        card.fill.solid()
+        card.fill.fore_color.rgb = fill_color
+    else:
+        card.fill.background()
+    if border_color is not None:
+        card.line.color.rgb = border_color
+        card.line.width = Pt(0.75)
+    _apply_card_styling(card, tokens)
+    card.text_frame.text = ""
+
+    pad = Inches(0.25)
+    title_h = Inches(0.5)
+    cta_h = Inches(0.35) if cta_text else Length(0)
+    blurb_top = Length(top + pad + title_h + Inches(0.05))
+    blurb_h = Length(int(height) - int(pad) * 2 - int(title_h) - int(cta_h) - Inches(0.1))
+
+    title_box = slide.shapes.add_textbox(
+        Length(left + pad), Length(top + pad), Length(width - 2 * pad), title_h
+    )
+    _fill_text_frame(
+        title_box.text_frame,
+        title,
+        token=_typography(tokens, "heading", default_size=Pt(16), default_bold=True),
+        color=title_color,
+        align=PP_ALIGN.LEFT,
+        anchor=MSO_ANCHOR.TOP,
+    )
+
+    blurb_box = slide.shapes.add_textbox(
+        Length(left + pad), blurb_top, Length(width - 2 * pad), blurb_h
+    )
+    _fill_text_frame(
+        blurb_box.text_frame,
+        blurb,
+        token=_typography(tokens, "body", default_size=Pt(11)),
+        color=blurb_color,
+        align=PP_ALIGN.LEFT,
+        anchor=MSO_ANCHOR.TOP,
+        word_wrap=True,
+    )
+
+    cta = None
+    if cta_text:
+        cta_w = Inches(1.2)
+        cta = add_status_pill(
+            slide,
+            left=Length(left + pad),
+            top=Length(top + height - pad - cta_h),
+            width=cta_w,
+            height=cta_h,
+            text=cta_text,
+            tokens=tokens,
+        )
+
+    group_name = f"article_card@{int(left)},{int(top)}"
+    for shape in (card, title_box, blurb_box):
+        try:
+            shape.lint_group = group_name
+        except (AttributeError, NotImplementedError):
+            pass
+
+    return ArticleCard(card=card, title_box=title_box, blurb_box=blurb_box, cta=cta)

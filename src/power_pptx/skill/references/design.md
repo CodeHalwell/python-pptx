@@ -213,9 +213,30 @@ bar = add_progress_bar(
 # bar.track / bar.fill — animate or restyle either independently.
 ```
 
-Both components tag their stacked shapes with `lint_group` so the
-linter doesn't flag the intentional overlap (label-on-card,
-fill-on-track) as a collision.
+All shape-level components tag their stacked shapes with
+`lint_group` so the linter doesn't flag the intentional overlap
+(label-on-card, fill-on-track) as a collision.
+
+Other components in the same module:
+
+```python
+from power_pptx import (
+    add_gauge,         # progress bar with optional target tick
+    add_status_pill,   # coloured pill + centred label, e.g. "LIVE"
+    add_stat_strip,    # n KPI tiles laid out across a strip with gutter
+    add_article_card,  # title + blurb + optional CTA pill
+)
+
+add_gauge(slide, left=Inches(1), top=Inches(2), width=Inches(4),
+          height=Inches(0.3), fraction=0.62, target=0.80, tokens=tokens)
+
+add_stat_strip(slide, left=Inches(0.5), top=Inches(1.5),
+               width=Inches(12), height=Inches(1.9),
+               items=[{"label": "ARR", "value": "$182M"},
+                      {"label": "NDR", "value": "131%", "delta": +0.03},
+                      {"label": "CAC payback", "value": "8 mo"}],
+               tokens=tokens)
+```
 
 ## Starter pack
 

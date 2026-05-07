@@ -8,10 +8,18 @@ from typing import TYPE_CHECKING
 import power_pptx.exc as exceptions
 from power_pptx.api import Presentation
 from power_pptx.design.components import (
+    ArticleCard,
+    Gauge,
     KpiCard,
     ProgressBar,
+    StatStrip,
+    StatusPill,
+    add_article_card,
+    add_gauge,
     add_kpi_card,
     add_progress_bar,
+    add_stat_strip,
+    add_status_pill,
 )
 from power_pptx.design.figures import (
     FigureBackendUnavailable,
@@ -62,8 +70,16 @@ __all__ = [
     # Shape-level building blocks built on the design tokens.
     "add_kpi_card",
     "add_progress_bar",
+    "add_gauge",
+    "add_status_pill",
+    "add_stat_strip",
+    "add_article_card",
     "KpiCard",
     "ProgressBar",
+    "Gauge",
+    "StatusPill",
+    "StatStrip",
+    "ArticleCard",
 ]
 
 content_type_to_part_class_map: dict[str, type[Part]] = {
