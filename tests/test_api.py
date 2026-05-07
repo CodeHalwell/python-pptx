@@ -14,6 +14,36 @@ from power_pptx.parts.presentation import PresentationPart
 from .unitutil.mock import class_mock, instance_mock
 
 
+class DescribePackageSurface:
+    """Top-level package re-exports — keep these stable.
+
+    These names are documented entry points; if any of them disappear
+    the docs drift silently. The test fails before docs do.
+    """
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Presentation",
+            "add_plotly_figure",
+            "add_matplotlib_figure",
+            "add_svg_figure",
+            "add_html_figure",
+            "FigureBackendUnavailable",
+            "add_kpi_card",
+            "add_progress_bar",
+            "KpiCard",
+            "ProgressBar",
+        ],
+    )
+    def it_exposes_each_documented_name_at_package_root(self, name):
+        assert hasattr(power_pptx, name), (
+            f"power_pptx.{name} is documented as a top-level export but "
+            "is not importable from the package root."
+        )
+        assert name in power_pptx.__all__
+
+
 class DescribePresentation(object):
     def it_opens_default_template_on_no_path_provided(self, call_fixture):
         Package_, path, prs_ = call_fixture

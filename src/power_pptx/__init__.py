@@ -7,6 +7,19 @@ from typing import TYPE_CHECKING
 
 import power_pptx.exc as exceptions
 from power_pptx.api import Presentation
+from power_pptx.design.components import (
+    KpiCard,
+    ProgressBar,
+    add_kpi_card,
+    add_progress_bar,
+)
+from power_pptx.design.figures import (
+    FigureBackendUnavailable,
+    add_html_figure,
+    add_matplotlib_figure,
+    add_plotly_figure,
+    add_svg_figure,
+)
 from power_pptx.opc.constants import CONTENT_TYPE as CT
 from power_pptx.opc.package import PartFactory
 from power_pptx.parts.chart import ChartPart
@@ -37,7 +50,21 @@ __version__ = "2.5.0"
 sys.modules["power_pptx.exceptions"] = exceptions
 del sys
 
-__all__ = ["Presentation"]
+__all__ = [
+    "Presentation",
+    # Figure adapters — embed Plotly / Matplotlib / SVG / HTML output as
+    # slide pictures. Third-party deps are imported lazily on first call.
+    "add_plotly_figure",
+    "add_matplotlib_figure",
+    "add_svg_figure",
+    "add_html_figure",
+    "FigureBackendUnavailable",
+    # Shape-level building blocks built on the design tokens.
+    "add_kpi_card",
+    "add_progress_bar",
+    "KpiCard",
+    "ProgressBar",
+]
 
 content_type_to_part_class_map: dict[str, type[Part]] = {
     CT.PML_PRESENTATION_MAIN: PresentationPart,
