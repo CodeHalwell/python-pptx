@@ -628,7 +628,7 @@ class _BaseGroupShapes(_BaseShapes):
         """Add picture shape displaying image in `image_file`.
 
         `image_file` can be either a path to a file (a string) or a file-like object. The picture
-        is positioned with its top-left corner at (`top`, `left`). If `width` and `height` are
+        is positioned with its top-left corner at (`left`, `top`). If `width` and `height` are
         both |None|, the native size of the image is used. If only one of `width` or `height` is
         used, the unspecified dimension is calculated to preserve the aspect ratio of the image.
         If both are specified, the picture is stretched to fit, without regard to its native

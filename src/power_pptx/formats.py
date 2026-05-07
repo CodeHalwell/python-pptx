@@ -16,7 +16,7 @@ abstraction:
     plot.data_labels.number_format = currency("£", decimals=2)   # "£"#,##0.00
     plot.data_labels.number_format = percent(decimals=1)         # 0.0%
     plot.data_labels.number_format = decimal(decimals=2)         # #,##0.00
-    plot.data_labels.number_format = date("YYYY-MM-DD")          # yyyy-mm-dd
+    plot.data_labels.number_format = date("YYYY-MM-DD")          # yyyy-MM-dd
     plot.data_labels.number_format = scientific(decimals=2)      # 0.00E+00
 
 The strings are plain ``str`` so they round-trip through
@@ -122,8 +122,10 @@ def date(pattern: str = "YYYY-MM-DD") -> str:
 
     Examples::
 
-        date()                  # "yyyy-mm-dd" (default ISO date)
-        date("YYYY-MM-DD HH:SS")  # "yyyy-MM-dd hh:ss"  -- minutes vs months
+        date()                    # "yyyy-MM-dd" (default ISO date)
+        date("YYYY-MM-DD HH:SS")   # "yyyy-MM-dd hh:ss"  -- "MM" stays
+                                   # capitalised so Excel reads it
+                                   # as month, not minutes
         date("MMM YYYY")          # "MMM yyyy"
     """
     if not isinstance(pattern, str):  # type: ignore[redundant-expr]

@@ -163,8 +163,9 @@ class ShapeCollision(LintIssue):
         if groups == (None, None):
             hint_suffix = (
                 " — tip: if this overlap is intentional, set "
-                'shape.lint_group = "<name>" on both shapes (or wrap '
-                "them in slide.shapes.lint_group_scope()) to suppress."
+                'shape.lint_group = "<name>" on both shapes, or use '
+                "slide.shapes.lint_group_scope() to tag a block of "
+                "shapes at once."
             )
         super().__init__(
             severity=severity,
