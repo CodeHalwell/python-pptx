@@ -27,8 +27,12 @@ from ..unitutil.mock import (
 )
 
 
-def _make_chart_with_series(series_names):
-    """Build a real `Chart` with N series for palette/integration tests."""
+def _make_chart_with_series(series_names, chart_type=None):
+    """Build a real `Chart` with N series for palette/integration tests.
+
+    Default is COLUMN_CLUSTERED to preserve existing tests; pass
+    ``chart_type=`` to construct any other type for type-dispatch tests.
+    """
     from power_pptx import Presentation
     from power_pptx.chart.data import CategoryChartData
     from power_pptx.util import Inches
@@ -40,7 +44,7 @@ def _make_chart_with_series(series_names):
     for name in series_names:
         data.add_series(name, (1, 2, 3))
     gframe = slide.shapes.add_chart(
-        XL_CHART_TYPE.COLUMN_CLUSTERED,
+        chart_type or XL_CHART_TYPE.COLUMN_CLUSTERED,
         Inches(1),
         Inches(1),
         Inches(6),
@@ -244,6 +248,124 @@ class DescribeChart(object):
         chart = _make_chart_with_series(("S1",))
         with pytest.raises(AttributeError):
             chart.text_color  # noqa: B018
+
+    def it_recolours_per_series_for_multi_series_charts(self):
+        chart = _make_chart_with_series(("S1", "S2"))
+
+        chart.recolour(["#FF0000", "#00FF00"])
+
+        actual = [str(s.format.fill.fore_color.rgb) for s in chart.series]
+        assert actual == ["FF0000", "00FF00"]
+
+    def it_recolours_per_point_for_pie_and_doughnut_charts(self):
+        # Single-series chart types are dispatched to color_by_category so
+        # palette wraps across slices, not series.
+        chart = _make_chart_with_series(("Slices",), XL_CHART_TYPE.DOUGHNUT)
+
+        chart.recolour(["#FF0000", "#00FF00", "#0000FF"])
+
+        actual = [str(p.format.fill.fore_color.rgb) for p in chart.series[0].points]
+        assert actual == ["FF0000", "00FF00", "0000FF"]
+
+    def it_honours_explicit_by_series_on_pie_and_doughnut(self):
+        chart = _make_chart_with_series(("Slices",), XL_CHART_TYPE.DOUGHNUT)
+
+        chart.recolour(["#112233"], by="series")
+
+        # The single series fill is set; per-point fills are not.
+        assert str(chart.series[0].format.fill.fore_color.rgb) == "112233"
+
+    def it_honours_explicit_by_category_on_column_charts(self):
+        chart = _make_chart_with_series(("S1", "S2"))
+
+        chart.recolour(["#AABBCC", "#DDEEFF", "#102030"], by="category")
+
+        # Each point in series 0 gets the matching category colour.
+        actual = [str(p.format.fill.fore_color.rgb) for p in chart.series[0].points]
+        assert actual == ["AABBCC", "DDEEFF", "102030"]
+
+    def it_rejects_unknown_by_argument(self):
+        chart = _make_chart_with_series(("S1",))
+        with pytest.raises(ValueError, match="by must be"):
+            chart.recolour(["#000000"], by="bogus")
+
+    def it_provides_recolor_as_us_spelling_alias(self):
+        # The two methods share an underlying function; bound-method
+        # identity differs but ``__func__`` identifies the alias.
+        chart = _make_chart_with_series(("S1",))
+        assert chart.recolor.__func__ is chart.recolour.__func__
+
+    def it_warns_when_apply_palette_is_called_on_a_doughnut(self):
+        chart = _make_chart_with_series(("Slices",), XL_CHART_TYPE.DOUGHNUT)
+
+        with pytest.warns(UserWarning, match="color_by_category"):
+            chart.apply_palette(["#FF0000", "#00FF00", "#0000FF"])
+
+        # And the warn-and-route still produces correct per-slice colours.
+        actual = [str(p.format.fill.fore_color.rgb) for p in chart.series[0].points]
+        assert actual == ["FF0000", "00FF00", "0000FF"]
+
+    def it_pins_axis_line_and_gridline_colours_via_line_color(self):
+        from power_pptx.dml.color import RGBColor
+
+        chart = _make_chart_with_series(("S1",))
+        # has_major_gridlines defaults vary by chart type; force on so the
+        # gridline-write branch is exercised.
+        chart.value_axis.has_major_gridlines = True
+        chart.category_axis.has_major_gridlines = True
+
+        chart.line_color = "#3A3E5F"
+
+        rgb = RGBColor(0x3A, 0x3E, 0x5F)
+        assert chart.value_axis.format.line.color.rgb == rgb
+        assert chart.category_axis.format.line.color.rgb == rgb
+        assert chart.value_axis.major_gridlines.format.line.color.rgb == rgb
+        assert chart.category_axis.major_gridlines.format.line.color.rgb == rgb
+
+    def it_skips_axes_silently_for_charts_without_them(self):
+        # Doughnut has no category/value axis. line_color must no-op
+        # rather than raise, so it's safe to call generically across
+        # mixed-chart-type decks.
+        chart = _make_chart_with_series(("Slices",), XL_CHART_TYPE.DOUGHNUT)
+
+        chart.line_color = "#3A3E5F"  # should not raise
+
+    def it_does_not_materialise_gridlines_when_setting_line_color(self):
+        # Don't introduce gridlines as a side-effect of colour setting —
+        # appearance changes should be opt-in.
+        chart = _make_chart_with_series(("S1",))
+        chart.value_axis.has_major_gridlines = False
+        chart.category_axis.has_major_gridlines = False
+
+        chart.line_color = "#3A3E5F"
+
+        assert chart.value_axis.has_major_gridlines is False
+        assert chart.category_axis.has_major_gridlines is False
+
+    def it_rejects_invalid_line_color_types(self):
+        chart = _make_chart_with_series(("S1",))
+        with pytest.raises(TypeError):
+            chart.line_color = 123  # type: ignore[assignment]
+
+    def it_raises_on_line_color_read(self):
+        chart = _make_chart_with_series(("S1",))
+        with pytest.raises(AttributeError):
+            chart.line_color  # noqa: B018
+
+    def it_applies_a_dark_theme_in_one_call(self):
+        from power_pptx.dml.color import RGBColor
+
+        chart = _make_chart_with_series(("S1",))
+        chart.value_axis.has_major_gridlines = True
+
+        chart.apply_dark_theme(text="#FFFFFF", line="#3A3E5F")
+
+        assert chart.font.color.rgb == RGBColor(0xFF, 0xFF, 0xFF)
+        assert chart.value_axis.format.line.color.rgb == RGBColor(0x3A, 0x3E, 0x5F)
+        assert (
+            chart.value_axis.major_gridlines.format.line.color.rgb
+            == RGBColor(0x3A, 0x3E, 0x5F)
+        )
 
     def it_supports_gradient_fills_per_series_via_ChartFormat(self):
         """Per-series gradient fills are exposed through `ChartFormat.fill`,
