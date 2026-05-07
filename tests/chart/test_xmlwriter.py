@@ -724,3 +724,60 @@ def make_xy_chart_data(ser_count, point_count):
             x, y = points[point_idx]
             series.add_data_point(x, y)
     return chart_data
+
+
+class DescribeEndParaRPrLang(object):
+    """Regression: PowerPoint rejects bare ``<a:endParaRPr/>``.
+
+    Per the OOXML schema the ``lang`` attribute on
+    ``CT_TextCharacterProperties`` is optional, but Microsoft PowerPoint's
+    open-time validator is stricter than the spec and prompts the user to
+    "Repair" the file when ``<a:endParaRPr>`` is emitted without one. The
+    bug previously affected the area + doughnut writers, which used
+    different chartSpace template literals from the rest of the writers.
+
+    This test asserts the property holds for every chart writer so the
+    regression cannot return on any future writer.
+    """
+
+    @pytest.mark.parametrize(
+        "writer_cls, chart_type_name, builder",
+        (
+            (_AreaChartXmlWriter, "AREA", "category"),
+            (_AreaChartXmlWriter, "AREA_STACKED", "category"),
+            (_AreaChartXmlWriter, "AREA_STACKED_100", "category"),
+            (_BarChartXmlWriter, "BAR_CLUSTERED", "category"),
+            (_BarChartXmlWriter, "BAR_STACKED", "category"),
+            (_BarChartXmlWriter, "COLUMN_CLUSTERED", "category"),
+            (_DoughnutChartXmlWriter, "DOUGHNUT", "category"),
+            (_DoughnutChartXmlWriter, "DOUGHNUT_EXPLODED", "category"),
+            (_LineChartXmlWriter, "LINE", "category"),
+            (_PieChartXmlWriter, "PIE", "category"),
+            (_RadarChartXmlWriter, "RADAR", "category"),
+            (_XyChartXmlWriter, "XY_SCATTER", "xy"),
+            (_BubbleChartXmlWriter, "BUBBLE", "bubble"),
+        ),
+    )
+    def it_emits_lang_on_every_endParaRPr(self, writer_cls, chart_type_name, builder):
+        chart_type = getattr(XL_CHART_TYPE, chart_type_name)
+        if builder == "category":
+            chart_data = make_category_chart_data(2, str, 2)
+        elif builder == "xy":
+            chart_data = make_xy_chart_data(2, 2)
+        else:
+            chart_data = make_bubble_chart_data(2, 2)
+
+        xml = writer_cls(chart_type, chart_data).xml
+
+        assert "<a:endParaRPr/>" not in xml, (
+            f"{writer_cls.__name__} emits a bare <a:endParaRPr/>; "
+            "PowerPoint will prompt to 'Repair' the file. Add lang=\"en-US\"."
+        )
+        # Stronger check: every endParaRPr must carry a lang attribute.
+        import re
+
+        for match in re.finditer(r"<a:endParaRPr\b[^>]*>", xml):
+            assert "lang=" in match.group(0), (
+                f"{writer_cls.__name__} emitted endParaRPr without lang: "
+                f"{match.group(0)!r}"
+            )

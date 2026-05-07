@@ -159,7 +159,7 @@
       <a:pPr>
         <a:defRPr sz="1800"/>
       </a:pPr>
-      <a:endParaRPr/>
+      <a:endParaRPr lang="en-US"/>
     </a:p>
   </c:txPr>
 </c:chartSpace>
