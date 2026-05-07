@@ -352,6 +352,36 @@ class DescribeChart(object):
         with pytest.raises(AttributeError):
             chart.line_color  # noqa: B018
 
+    def it_reverses_category_axis_by_default_on_horizontal_bar_charts(self):
+        # Horizontal bar charts read top-to-bottom; OOXML's default puts
+        # category[0] at the bottom, which is the opposite of natural
+        # reading order. add_chart flips this for BAR_* types so the
+        # first-fed category renders at the top.
+        chart = _make_chart_with_series(
+            ("S1", "S2"), chart_type=XL_CHART_TYPE.BAR_CLUSTERED
+        )
+        assert chart.category_axis.reverse_order is True
+
+    def it_does_not_reverse_axis_on_column_charts(self):
+        # Column charts read left-to-right and OOXML's default already
+        # matches; don't flip those.
+        chart = _make_chart_with_series(
+            ("S1",), chart_type=XL_CHART_TYPE.COLUMN_CLUSTERED
+        )
+        assert chart.category_axis.reverse_order is False
+
+    def it_excludes_bar_of_pie_from_horizontal_bar_default(self):
+        # BAR_OF_PIE is a pie variant, not a horizontal-bar chart. The
+        # helper that flips reverse_order on BAR_* types must not match
+        # it. (We test the helper's predicate directly; the chart writer
+        # for BAR_OF_PIE is not implemented in the library.)
+        from power_pptx.shapes.shapetree import _HORIZONTAL_BAR_CHART_NAMES
+
+        assert "BAR_OF_PIE" not in _HORIZONTAL_BAR_CHART_NAMES
+        # And every BAR_*-named horizontal chart we *do* support is in.
+        assert "BAR_CLUSTERED" in _HORIZONTAL_BAR_CHART_NAMES
+        assert "THREE_D_BAR_STACKED" in _HORIZONTAL_BAR_CHART_NAMES
+
     def it_applies_a_dark_theme_in_one_call(self):
         from power_pptx.dml.color import RGBColor
 

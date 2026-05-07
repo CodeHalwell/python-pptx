@@ -50,6 +50,52 @@ if TYPE_CHECKING:
     from power_pptx.types import ProvidesPart
     from power_pptx.util import Length
 
+# Horizontal-bar chart types — those where category[0] sits at the
+# bottom of the axis by default. We flip ``reverse_order`` on these
+# at creation time so the first category renders at the top, matching
+# the natural reading order. ``BAR_OF_PIE`` is excluded — it's a pie
+# variant, not a horizontal-bar chart.
+_HORIZONTAL_BAR_CHART_NAMES = frozenset(
+    {
+        "BAR_CLUSTERED",
+        "BAR_STACKED",
+        "BAR_STACKED_100",
+        "THREE_D_BAR_CLUSTERED",
+        "THREE_D_BAR_STACKED",
+        "THREE_D_BAR_STACKED_100",
+        "CONE_BAR_CLUSTERED",
+        "CONE_BAR_STACKED",
+        "CONE_BAR_STACKED_100",
+        "CYLINDER_BAR_CLUSTERED",
+        "CYLINDER_BAR_STACKED",
+        "CYLINDER_BAR_STACKED_100",
+        "PYRAMID_BAR_CLUSTERED",
+        "PYRAMID_BAR_STACKED",
+        "PYRAMID_BAR_STACKED_100",
+    }
+)
+
+
+def _apply_horizontal_bar_default(graphic_frame, chart_type) -> None:
+    """Reverse the category axis on horizontal-bar chart types.
+
+    OOXML's default places ``category[0]`` at the bottom of the axis,
+    which makes a chart fed ``["A", "B", "C"]`` render with ``A`` at
+    the bottom — counterintuitive for natural top-to-bottom reading.
+    This flips it for the bar types where users almost always want
+    top-to-bottom; column charts keep their default left-to-right
+    ordering. Caller can override post-creation if the legacy default
+    is wanted.
+    """
+    if getattr(chart_type, "name", None) not in _HORIZONTAL_BAR_CHART_NAMES:
+        return
+    try:
+        graphic_frame.chart.category_axis.reverse_order = True
+    except (AttributeError, ValueError):
+        # Defensive: never break chart creation on a styling tweak.
+        pass
+
+
 # +-- _BaseShapes
 # |   |
 # |   +-- _BaseGroupShapes
@@ -245,11 +291,19 @@ class _BaseGroupShapes(_BaseShapes):
         Note that a |GraphicFrame| shape object is returned, not the |Chart| object contained in
         that graphic frame shape. The chart object may be accessed using the :attr:`chart`
         property of the returned |GraphicFrame| object.
+
+        For horizontal bar charts (``BAR_*`` enum members), the category
+        axis is reversed by default so the first category renders at the
+        top — matching the natural reading order. Column charts retain
+        their default left-to-right ordering. Override by setting
+        ``chart.category_axis.reverse_order = False`` after creation.
         """
         rId = self.part.add_chart_part(chart_type, chart_data)
         graphicFrame = self._add_chart_graphicFrame(rId, x, y, cx, cy)
         self._recalculate_extents()
-        return cast("Chart", self._shape_factory(graphicFrame))
+        shape = self._shape_factory(graphicFrame)
+        _apply_horizontal_bar_default(shape, chart_type)
+        return cast("Chart", shape)
 
     def add_connector(
         self,
