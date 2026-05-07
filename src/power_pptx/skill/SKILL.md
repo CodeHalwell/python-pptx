@@ -87,6 +87,27 @@ collections. Read just the file you need — they're self-contained.
 | `references/tables.md` | The inherited table API, plus `Cell.borders`. **Phase 4.** |
 | `references/end-to-end-deck.md` | A complete worked example: tokens, recipes, animations, transitions, charts, **and a lint pass before save**. |
 
+## Top-level imports beyond `Presentation`
+
+These are stable package-root re-exports — prefer them over deeper
+import paths:
+
+```python
+from power_pptx import (
+    Presentation,
+    # Figure adapters — Plotly / Matplotlib / SVG / HTML → slide picture.
+    # Third-party deps are imported lazily; missing deps surface a clear
+    # FigureBackendUnavailable with the right pip install command.
+    add_plotly_figure, add_matplotlib_figure,
+    add_svg_figure,    add_html_figure,
+    FigureBackendUnavailable,
+    # Shape-level building blocks (token-driven; return small
+    # dataclasses exposing constituent shapes for further tweaks).
+    add_kpi_card, add_progress_bar,
+    KpiCard,      ProgressBar,
+)
+```
+
 ## House rules for code you write
 
 1. **Always `from power_pptx import Presentation`** — never invent another
@@ -148,6 +169,29 @@ if errors:
 prs.save("out.pptx")
 ```
 
+## Recent additions worth knowing
+
+These changes ship after v2.5 and are easy to miss:
+
+- **`Chart.recolour(palette)`** is the recommended single entry
+  point — auto-dispatches per chart type (per-point on pie /
+  doughnut, per-series otherwise). `apply_palette` warns and
+  routes when called on a doughnut.
+- **`Chart.line_color`** and **`Chart.apply_dark_theme(text=, line=)`**
+  pin axis lines + gridlines for dark-deck styling.
+- **Horizontal bar charts (`BAR_*`)** now default to top-to-bottom
+  reading order (`reverse_order=True`). Override with
+  `chart.category_axis.reverse_order = False` for legacy ordering.
+  Column charts are unaffected.
+- **`anchor=` keyword on `add_picture` / `add_shape` / `add_textbox`**
+  collapses corner / centre placement to one call (see
+  `references/basics.md`).
+- **`add_table(..., style="clean")`** disables every inherited style
+  flag — use it whenever you'll set custom cell borders or fills.
+- **`add_kpi_card(slide, ...)` / `add_progress_bar(slide, ...)`** —
+  shape-level building blocks beneath the slide-level recipes
+  (see `references/design.md`).
+
 ## Common pitfalls
 
 - **Calling `shape.shadow.inherit`** raises `DeprecationWarning`. Read
@@ -168,6 +212,9 @@ prs.save("out.pptx")
   Otherwise you get `ThumbnailRendererUnavailable`.
 - **`MSO_PATTERN_TYPE.ERCENT_40`** is the upstream typo and emits a
   `DeprecationWarning`. Use `PERCENT_40`.
+- **Calling `chart.apply_palette` on a pie / doughnut** emits a
+  `UserWarning` and routes through `color_by_category`. Use
+  `chart.recolour(palette)` directly to silence it.
 
 ## Where to look in the project
 

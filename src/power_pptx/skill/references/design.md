@@ -178,6 +178,45 @@ tinting deltas (falls back to green/red when unset). It applies
 `image_hero_slide` uses `palette["on_primary"]` for overlay text and
 tints the bottom band with `palette["primary"]` at 55% alpha.
 
+## Shape-level building blocks
+
+For mixed layouts where the slide-level recipes don't fit, reach for
+the shape-level components in `power_pptx.design.components`. Both
+honour the deck's `DesignTokens` and return small dataclasses
+exposing the constituent shapes, so callers can compose them into
+custom layouts without re-implementing the styling:
+
+```python
+from power_pptx import add_kpi_card, add_progress_bar
+from power_pptx.util import Inches
+
+kpi = add_kpi_card(
+    slide,
+    left=Inches(1), top=Inches(1),
+    width=Inches(2.5), height=Inches(1.9),
+    label="ARR",
+    value="$182M",
+    delta={"delta": +0.27},
+    tokens=tokens,
+)
+# kpi.card / kpi.value_box / kpi.label_box / kpi.delta_box are
+# accessible for further per-deck tweaks.
+
+bar = add_progress_bar(
+    slide,
+    left=Inches(1), top=Inches(3),
+    width=Inches(6), height=Inches(0.3),
+    fraction=0.42,         # 0..1 — clamped if you go over
+    tokens=tokens,
+    fill_color="#4F9DFF",  # optional override
+)
+# bar.track / bar.fill — animate or restyle either independently.
+```
+
+Both components tag their stacked shapes with `lint_group` so the
+linter doesn't flag the intentional overlap (label-on-card,
+fill-on-track) as a collision.
+
 ## Starter pack
 
 `examples/starter_pack/` ships three example token sets — `modern`,

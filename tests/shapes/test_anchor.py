@@ -185,6 +185,78 @@ class DescribeAnchorOnAddTextbox:
         assert int(tb.top) == int(Inches(0.5))
 
 
+class DescribeLintGroupScope:
+    def it_tags_every_shape_added_inside_with_block(self):
+        prs, slide = _slide()
+        with slide.shapes.lint_group_scope("progress_bar") as g:
+            track = slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE,
+                Inches(1), Inches(1), Inches(4), Inches(0.3),
+            )
+            fill = g.add_shape(  # using yielded handle works too
+                MSO_SHAPE.ROUNDED_RECTANGLE,
+                Inches(1), Inches(1), Inches(2), Inches(0.3),
+            )
+        assert track.lint_group == "progress_bar"
+        assert fill.lint_group == "progress_bar"
+
+    def it_does_not_retag_shapes_added_before_the_block(self):
+        prs, slide = _slide()
+        prior = slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE,
+            Inches(0), Inches(0), Inches(1), Inches(1),
+        )
+        with slide.shapes.lint_group_scope("group-x"):
+            new_shape = slide.shapes.add_shape(
+                MSO_SHAPE.RECTANGLE,
+                Inches(2), Inches(2), Inches(1), Inches(1),
+            )
+        assert prior.lint_group is None
+        assert new_shape.lint_group == "group-x"
+
+    def it_auto_generates_a_unique_name_when_not_supplied(self):
+        prs, slide = _slide()
+        with slide.shapes.lint_group_scope() as g:
+            s1 = slide.shapes.add_shape(
+                MSO_SHAPE.RECTANGLE,
+                Inches(0), Inches(0), Inches(1), Inches(1),
+            )
+            s2 = slide.shapes.add_shape(
+                MSO_SHAPE.RECTANGLE,
+                Inches(2), Inches(0), Inches(1), Inches(1),
+            )
+        assert s1.lint_group == s2.lint_group
+        assert s1.lint_group.startswith("design-group-")
+
+    def it_auto_increments_when_a_design_group_already_exists(self):
+        prs, slide = _slide()
+        with slide.shapes.lint_group_scope():
+            slide.shapes.add_shape(
+                MSO_SHAPE.RECTANGLE,
+                Inches(0), Inches(0), Inches(1), Inches(1),
+            )
+        with slide.shapes.lint_group_scope():
+            second = slide.shapes.add_shape(
+                MSO_SHAPE.RECTANGLE,
+                Inches(2), Inches(0), Inches(1), Inches(1),
+            )
+        # The second auto-named scope must pick a fresh number.
+        assert second.lint_group == "design-group-2"
+
+    def it_still_tags_when_the_block_raises(self):
+        # Better to tag than leave shapes flagged as real overlaps in
+        # the lint report.
+        prs, slide = _slide()
+        with pytest.raises(RuntimeError):
+            with slide.shapes.lint_group_scope("g"):
+                shape = slide.shapes.add_shape(
+                    MSO_SHAPE.RECTANGLE,
+                    Inches(0), Inches(0), Inches(1), Inches(1),
+                )
+                raise RuntimeError("boom")
+        assert shape.lint_group == "g"
+
+
 class DescribeAnchorOnAddPicture:
     def it_anchors_a_picture_to_bottom_right_of_the_slide(self):
         prs, slide = _slide()

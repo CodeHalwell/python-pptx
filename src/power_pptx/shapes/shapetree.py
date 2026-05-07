@@ -181,6 +181,60 @@ def _container_extents(shapetree, container) -> tuple[int, int]:
     )
 
 
+class _LintGroupScope:
+    """Context manager returned by :meth:`_BaseShapes.lint_group_scope`.
+
+    On enter it snapshots the current shape count of the tree; on
+    exit it tags every shape added in between with
+    ``shape.lint_group = name``. A diff-based approach keeps the
+    implementation independent of which ``add_*`` method the caller
+    uses — the proxy doesn't have to wrap each one individually, and
+    custom helpers that ultimately call into the tree just work.
+    """
+
+    def __init__(self, shapetree, name):
+        self._shapetree = shapetree
+        self._name = name
+        self._snapshot = 0
+
+    def __enter__(self):
+        self._snapshot = len(list(self._shapetree._iter_member_elms()))
+        return self._shapetree
+
+    def __exit__(self, exc_type, exc, tb):
+        # On exception, still tag — the shapes were added; bailing
+        # would leave them as untagged "real" overlaps in the lint
+        # report, which is the worse default.
+        from power_pptx.shapes.base import BaseShape
+
+        elms = list(self._shapetree._iter_member_elms())
+        added = elms[self._snapshot :]
+        if not added:
+            return False  # nothing to tag, propagate any exception
+
+        name = self._name
+        if name is None:
+            existing_groups = set()
+            for elm in elms:
+                shape = self._shapetree._shape_factory(elm)
+                tag = getattr(shape, "lint_group", None)
+                if tag:
+                    existing_groups.add(tag)
+            n = 1
+            while f"design-group-{n}" in existing_groups:
+                n += 1
+            name = f"design-group-{n}"
+
+        for elm in added:
+            shape: BaseShape = self._shapetree._shape_factory(elm)
+            try:
+                shape.lint_group = name
+            except (AttributeError, NotImplementedError):
+                # Some shape kinds don't carry a cNvPr (rare); skip.
+                pass
+        return False  # never suppress exceptions
+
+
 def _apply_horizontal_bar_default(graphic_frame, chart_type) -> None:
     """Reverse the category axis on horizontal-bar chart types.
 
@@ -259,6 +313,32 @@ class _BaseShapes(ParentedElementProxy):
         """
         shape_elms = list(self._iter_member_elms())
         return len(shape_elms)
+
+    def lint_group_scope(self, name: str | None = None):
+        """Context manager that auto-tags shapes added inside it.
+
+        Every shape appended to this shape tree between ``__enter__``
+        and ``__exit__`` is tagged with ``shape.lint_group = name`` on
+        exit, so the linter treats them as one intentional overlap
+        group. Use it for hand-built composite UI elements (progress
+        bars, gauges, badges, custom KPI tiles) where the constituent
+        shapes deliberately overlap and the auto-emitted
+        ``ShapeCollision`` warnings would be noise::
+
+            with slide.shapes.lint_group_scope(name="progress_bar") as g:
+                track = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, ...)
+                fill  = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, ...)
+            # both shapes now carry lint_group="progress_bar".
+
+        ``g`` (the yielded value) is this :class:`_BaseShapes`
+        instance, so calls inside the ``with`` block can also use
+        ``g.add_shape(...)`` for clarity.
+
+        When ``name`` is omitted a unique-on-this-tree name is
+        auto-generated (``"design-group-N"`` with smallest available
+        N), matching :meth:`Slide.lint_group_overlaps`.
+        """
+        return _LintGroupScope(self, name)
 
     def clone_placeholder(self, placeholder: LayoutPlaceholder) -> None:
         """Add a new placeholder shape based on `placeholder`."""

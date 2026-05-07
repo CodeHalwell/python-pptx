@@ -29,6 +29,29 @@ chart_shape = slide.shapes.add_chart(
 chart = chart_shape.chart
 ```
 
+## Recolouring (recommended entry point)
+
+`Chart.recolour(palette, by="auto")` is the single entry point you
+should reach for first. ``by="auto"`` (the default) dispatches per
+chart type — per-point colouring on pie / doughnut / pie-of-pie
+variants, per-series colouring on everything else — so a developer
+who just wants "recolour my chart" doesn't have to remember which
+helper applies. ``recolor`` is the US-spelling alias.
+
+```python
+chart.recolour(["#4F9DFF", "#7FCFA1", "#F7B500"])
+
+# Force a mode if you need to:
+chart.recolour(palette, by="series")    # always per-series
+chart.recolour(palette, by="category")  # always per-point
+```
+
+For doughnut / pie charts specifically, `recolour` is the right
+call — `apply_palette` is series-level and a doughnut has only one
+series, so it would tint every slice the same. Calling
+`apply_palette` on a doughnut now warns and routes through the
+right method, but explicit `recolour` is cleaner.
+
 ## Chart palettes
 
 `Chart.apply_palette(palette)` recolors every series in declaration
@@ -132,6 +155,35 @@ pat.patterned()
 pat.pattern   = MSO_PATTERN_TYPE.WIDE_DOWNWARD_DIAGONAL
 pat.fore_color.rgb = (0x10, 0xB9, 0x81)
 pat.back_color.rgb = (0xFF, 0xFF, 0xFF)
+```
+
+## Dark-deck styling
+
+For dark backgrounds you usually need to recolor every text-bearing
+location *and* every axis line / gridline. Two write-only facades and
+one one-call helper handle it:
+
+```python
+chart.text_color = "#FFFFFF"   # walks chart font, legend, title, data labels
+chart.line_color = "#3A3E5F"   # walks axis lines + gridlines (where present)
+
+# Or, the one-liner:
+chart.apply_dark_theme(text="#FFFFFF", line="#3A3E5F")
+```
+
+`line_color` is conservative: it skips axes that don't exist (pie /
+doughnut), and never materialises gridlines on axes that don't
+already have them — appearance changes are opt-in.
+
+## Horizontal bar charts: reading order
+
+Horizontal bar (``BAR_*``) charts now default to top-to-bottom reading
+order. Feeding ``["A", "B", "C"]`` renders ``A`` at the top, matching
+natural reading order. Column charts retain left-to-right ordering.
+Override post-creation with:
+
+```python
+chart.category_axis.reverse_order = False   # legacy bottom-up ordering
 ```
 
 ## End-to-end: branded chart
