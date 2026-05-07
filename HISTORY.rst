@@ -14,11 +14,15 @@ installs the ``pptx`` import name) is also present in the environment.
 .. _`scanny/python-pptx`: https://github.com/scanny/python-pptx
 
 
-Unreleased
-++++++++++
+2.6.0 (2026-05-07)
+++++++++++++++++++
 
-Follows up the v2.5 review with the P0 bug fix and the P1 ergonomic
-additions identified in the user feedback document.
+Follows up the v2.5 review with the P0 bug fix, the P1 ergonomic
+additions identified in the user feedback document, and the
+previously-deferred P2/P3 items (lint group context manager,
+formats helpers, data-label collision strategy, the remaining
+shape-level building blocks, a constrained shape.animate() façade,
+and a deck-level PowerPoint-strict test scan).
 
 Bug fixes
 ~~~~~~~~~
@@ -67,9 +71,58 @@ New APIs
 
 - Top-level imports — ``add_plotly_figure``, ``add_matplotlib_figure``,
   ``add_svg_figure``, ``add_html_figure``, ``FigureBackendUnavailable``,
-  ``add_kpi_card``, ``add_progress_bar``, ``KpiCard``, ``ProgressBar``
-  now importable from ``power_pptx`` directly (previously buried under
+  ``add_kpi_card``, ``add_progress_bar``, ``add_gauge``,
+  ``add_status_pill``, ``add_stat_strip``, ``add_article_card``, plus
+  the matching ``KpiCard`` / ``ProgressBar`` / ``Gauge`` / ``StatusPill``
+  / ``StatStrip`` / ``ArticleCard`` dataclasses are importable from
+  ``power_pptx`` directly (previously buried under
   ``power_pptx.design.figures`` / ``.components``).
+
+- ``slide.shapes.lint_group_scope(name=None)`` — context manager
+  that auto-tags every shape added inside the ``with`` block with
+  the same ``lint_group``. Auto-generates a ``"design-group-N"``
+  name when omitted. Lifts the existing ``shape.lint_group``
+  mechanic out of "discoverable only via the docstring" into a
+  first-class API. The ``ShapeCollision`` lint message now also
+  appends a one-line tip recommending it when both shapes are
+  untagged.
+
+- ``power_pptx.formats`` — number-format string helpers that hide
+  Excel's format-string syntax behind named functions: ``currency``,
+  ``percent``, ``decimal``, ``thousands``, ``scientific``, ``date``.
+  Use them with ``data_labels.number_format`` and
+  ``cell.text_frame.text`` callsites.
+
+- ``DataLabels.collision_strategy = "auto" | "shrink" | "compact"`` —
+  three opinionated strategies for handling overlapping data labels
+  on bar / column charts. ``"auto"`` shrinks font and drops
+  ``gapWidth`` to 60 only on multi-series + ≥5-category plots;
+  ``"compact"`` always applies both; ``"shrink"`` only shrinks the
+  font. For real layout-aware collision avoidance, use
+  ``add_plotly_figure`` — Plotly handles it natively.
+
+- ``add_gauge``, ``add_status_pill``, ``add_stat_strip``,
+  ``add_article_card`` — additional shape-level building blocks
+  alongside ``add_kpi_card`` / ``add_progress_bar``. Each returns a
+  small dataclass exposing the constituent shapes for further
+  per-deck tweaks and tags the stack with ``lint_group``.
+
+- ``BaseShape.animate(entry=, exit=, emphasis=, trigger=,
+  delay_ms=, duration_ms=, direction=)`` — constrained-subset
+  façade over the existing ``power_pptx.animation`` API. Pass
+  exactly one of ``entry`` / ``exit`` / ``emphasis`` and the
+  matching preset name. For animation types not covered, drop
+  down to ``Entrance`` / ``Exit`` / ``Emphasis`` directly.
+
+Test infrastructure
+~~~~~~~~~~~~~~~~~~~
+
+- ``tests/test_powerpoint_strict_validation.py`` — deck-level scan
+  that constructs a deck with every implemented chart type, saves
+  to bytes, and walks every XML part looking for stricter-than-spec
+  patterns PowerPoint rejects but the OOXML schema accepts. Catches
+  the ``<a:endParaRPr/>`` regression today; the scaffold is
+  reusable for additional strict-validator rules we discover.
 
 Behaviour changes
 ~~~~~~~~~~~~~~~~~
