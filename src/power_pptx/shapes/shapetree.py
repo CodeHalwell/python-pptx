@@ -76,6 +76,111 @@ _HORIZONTAL_BAR_CHART_NAMES = frozenset(
 )
 
 
+# Anchor strings accepted by ``add_picture`` / ``add_shape`` /
+# ``add_textbox``. The first token is vertical, the second horizontal;
+# ``"center"`` matches both axes (``center-center`` and bare
+# ``"center"`` are equivalent). The variant spellings keep both UK and
+# US conventions usable.
+_VERTICAL_ANCHORS = {"top", "middle", "center", "centre", "bottom"}
+_HORIZONTAL_ANCHORS = {"left", "center", "centre", "right"}
+
+
+def _resolve_anchor(anchor: str) -> tuple[str, str]:
+    """Return ``(vertical, horizontal)`` from a hyphenated anchor string.
+
+    Accepts ``"top-left"``, ``"top-center"``, ``"top-centre"``,
+    ``"middle-left"``, ``"middle-center"``, ``"middle-right"``,
+    ``"center"`` (== ``"middle-center"``), ``"bottom-left"``,
+    ``"bottom-center"``, ``"bottom-right"``, etc. ``"center-left"``
+    is also accepted as a synonym for ``"middle-left"`` since it's
+    a common typo.
+    """
+    raw = anchor.strip().lower()
+    if raw in {"center", "centre"}:
+        return ("middle", "center")
+    if "-" not in raw:
+        raise ValueError(
+            f"anchor must be 'center' or 'vertical-horizontal' "
+            f"(e.g. 'top-right'); got {anchor!r}"
+        )
+    parts = [p.strip() for p in raw.split("-", 1)]
+    v, h = parts[0], parts[1]
+    # Accept "center-left" etc. as synonyms for "middle-left".
+    if v == "center" or v == "centre":
+        v = "middle"
+    if v not in _VERTICAL_ANCHORS or h not in _HORIZONTAL_ANCHORS:
+        raise ValueError(
+            f"anchor must be one of top|middle|bottom dash "
+            f"left|center|right; got {anchor!r}"
+        )
+    # Normalise "centre" → "center" on the horizontal half.
+    if h == "centre":
+        h = "center"
+    return (v, h)
+
+
+def _compute_anchor_left_top(
+    anchor: str,
+    container_w: int,
+    container_h: int,
+    shape_w: int,
+    shape_h: int,
+    margin: int = 0,
+) -> tuple[int, int]:
+    """Compute ``(left, top)`` EMU values for a shape under `anchor`.
+
+    The shape is positioned inside a container of size
+    (`container_w`, `container_h`), with `margin` EMU between the
+    shape and the matching container edges (margin is ignored on the
+    centre axes — centred shapes don't need an outer margin).
+    """
+    v, h = _resolve_anchor(anchor)
+
+    if h == "left":
+        left = margin
+    elif h == "right":
+        left = container_w - margin - shape_w
+    else:  # center
+        left = (container_w - shape_w) // 2
+
+    if v == "top":
+        top = margin
+    elif v == "bottom":
+        top = container_h - margin - shape_h
+    else:  # middle
+        top = (container_h - shape_h) // 2
+
+    return (left, top)
+
+
+def _container_extents(shapetree, container) -> tuple[int, int]:
+    """Return the (width, height) of a positioning container in EMU.
+
+    `container` may be ``None`` (use the slide), a slide-like object
+    exposing ``part.package.presentation_part``, or any object with
+    ``width`` and ``height`` attributes (e.g. a parent shape). Raises
+    ``ValueError`` if no usable extents can be derived.
+    """
+    if container is None:
+        prs = shapetree.part.package.presentation_part.presentation
+        return (int(prs.slide_width), int(prs.slide_height))
+    # Shape-like: width / height attributes.
+    if hasattr(container, "width") and hasattr(container, "height"):
+        w, h = container.width, container.height
+        if w is not None and h is not None:
+            return (int(w), int(h))
+    # Slide-like: try the same path as the default branch.
+    if hasattr(container, "part"):
+        try:
+            prs = container.part.package.presentation_part.presentation
+            return (int(prs.slide_width), int(prs.slide_height))
+        except AttributeError:
+            pass
+    raise ValueError(
+        "container must be None, a slide, or a shape with .width/.height"
+    )
+
+
 def _apply_horizontal_bar_default(graphic_frame, chart_type) -> None:
     """Reverse the category axis on horizontal-bar chart types.
 
@@ -401,10 +506,14 @@ class _BaseGroupShapes(_BaseShapes):
     def add_picture(
         self,
         image_file: str | IO[bytes],
-        left: Length,
-        top: Length,
+        left: Length = Emu(0),
+        top: Length = Emu(0),
         width: Length | None = None,
         height: Length | None = None,
+        *,
+        anchor: str | None = None,
+        margin: Length = Emu(0),
+        container=None,
     ) -> Picture:
         """Add picture shape displaying image in `image_file`.
 
@@ -414,11 +523,44 @@ class _BaseGroupShapes(_BaseShapes):
         used, the unspecified dimension is calculated to preserve the aspect ratio of the image.
         If both are specified, the picture is stretched to fit, without regard to its native
         aspect ratio.
+
+        When `anchor` is given, ``left`` and ``top`` are recomputed
+        from the anchor + the picture's rendered dimensions. The
+        common case "logo at bottom-right with a 0.25" margin"
+        becomes a single call::
+
+            slide.shapes.add_picture(
+                logo_path,
+                anchor="bottom-right",
+                margin=Inches(0.25),
+                height=Inches(0.32),
+            )
+
+        `anchor` is one of ``"top-left"``, ``"top-center"``,
+        ``"top-right"``, ``"middle-left"``, ``"middle-center"`` (or
+        bare ``"center"``), ``"middle-right"``, ``"bottom-left"``,
+        ``"bottom-center"``, ``"bottom-right"``. Either spelling of
+        "center"/"centre" is accepted.
+
+        `container` is the box the anchor is relative to. ``None``
+        (the default) anchors against the slide; pass a parent shape
+        (or any object with ``.width`` / ``.height``) to anchor inside
+        a card / group / placeholder. `margin` is the gap between the
+        picture and the matching container edges; ignored on the
+        centred axes.
         """
         image_part, rId = self.part.get_or_add_image_part(image_file)
         pic = self._add_pic_from_image_part(image_part, rId, left, top, width, height)
         self._recalculate_extents()
-        return cast(Picture, self._shape_factory(pic))
+        picture = cast(Picture, self._shape_factory(pic))
+        if anchor is not None:
+            cw, ch = _container_extents(self, container)
+            new_left, new_top = _compute_anchor_left_top(
+                anchor, cw, ch, int(picture.width), int(picture.height), int(margin)
+            )
+            picture.left = Emu(new_left)
+            picture.top = Emu(new_top)
+        return picture
 
     def add_svg_picture(
         self,
@@ -482,27 +624,70 @@ class _BaseGroupShapes(_BaseShapes):
         return cast(Picture, self._shape_factory(pic))
 
     def add_shape(
-        self, autoshape_type_id: MSO_SHAPE, left: Length, top: Length, width: Length, height: Length
+        self,
+        autoshape_type_id: MSO_SHAPE,
+        left: Length,
+        top: Length,
+        width: Length,
+        height: Length,
+        *,
+        anchor: str | None = None,
+        margin: Length = Emu(0),
+        container=None,
     ) -> Shape:
         """Return new |Shape| object appended to this shape tree.
 
         `autoshape_type_id` is a member of :ref:`MsoAutoShapeType` e.g. `MSO_SHAPE.RECTANGLE`
         specifying the type of shape to be added. The remaining arguments specify the new shape's
         position and size.
+
+        See :meth:`add_picture` for the semantics of `anchor`,
+        `margin`, and `container`. With `anchor` set, the supplied
+        `left` / `top` are overwritten after creation by the
+        anchor-derived position.
         """
         autoshape_type = AutoShapeType(autoshape_type_id)
         sp = self._add_sp(autoshape_type, left, top, width, height)
         self._recalculate_extents()
-        return cast(Shape, self._shape_factory(sp))
+        shape = cast(Shape, self._shape_factory(sp))
+        if anchor is not None:
+            cw, ch = _container_extents(self, container)
+            new_left, new_top = _compute_anchor_left_top(
+                anchor, cw, ch, int(shape.width), int(shape.height), int(margin)
+            )
+            shape.left = Emu(new_left)
+            shape.top = Emu(new_top)
+        return shape
 
-    def add_textbox(self, left: Length, top: Length, width: Length, height: Length) -> Shape:
+    def add_textbox(
+        self,
+        left: Length,
+        top: Length,
+        width: Length,
+        height: Length,
+        *,
+        anchor: str | None = None,
+        margin: Length = Emu(0),
+        container=None,
+    ) -> Shape:
         """Return newly added text box shape appended to this shape tree.
 
         The text box is of the specified size, located at the specified position on the slide.
+
+        See :meth:`add_picture` for `anchor` / `margin` / `container`
+        semantics.
         """
         sp = self._add_textbox_sp(left, top, width, height)
         self._recalculate_extents()
-        return cast(Shape, self._shape_factory(sp))
+        textbox = cast(Shape, self._shape_factory(sp))
+        if anchor is not None:
+            cw, ch = _container_extents(self, container)
+            new_left, new_top = _compute_anchor_left_top(
+                anchor, cw, ch, int(textbox.width), int(textbox.height), int(margin)
+            )
+            textbox.left = Emu(new_left)
+            textbox.top = Emu(new_top)
+        return textbox
 
     def build_freeform(
         self, start_x: float = 0, start_y: float = 0, scale: tuple[float, float] | float = 1.0
