@@ -696,7 +696,15 @@ class SlideShapes(_BaseGroupShapes):
         return cast(GraphicFrame, self._shape_factory(movie_pic))
 
     def add_table(
-        self, rows: int, cols: int, left: Length, top: Length, width: Length, height: Length
+        self,
+        rows: int,
+        cols: int,
+        left: Length,
+        top: Length,
+        width: Length,
+        height: Length,
+        *,
+        style: str = "default",
     ) -> GraphicFrame:
         """Add a |GraphicFrame| object containing a table.
 
@@ -704,9 +712,35 @@ class SlideShapes(_BaseGroupShapes):
         size. `width` is evenly distributed between the columns of the new table. Likewise,
         `height` is evenly distributed between the rows. Note that the `.table` property on the
         returned |GraphicFrame| shape must be used to access the enclosed |Table| object.
+
+        ``style`` controls the inherited table-style flags applied at
+        construction time:
+
+        * ``"default"`` (back-compat) — leave PowerPoint's
+          inherited-style flags alone. Behaves as before this argument
+          existed.
+        * ``"clean"`` — disable every inherited style flag
+          (``first_row``, ``first_col``, ``last_row``, ``last_col``,
+          ``horz_banding``, ``vert_banding``). Use when applying custom
+          cell borders or fills, since the inherited style otherwise
+          overlays them and renders inconsistently across PowerPoint
+          and LibreOffice.
         """
+        if style not in ("default", "clean"):
+            raise ValueError(
+                f"style must be 'default' or 'clean'; got {style!r}"
+            )
         graphicFrame = self._add_graphicFrame_containing_table(rows, cols, left, top, width, height)
-        return cast(GraphicFrame, self._shape_factory(graphicFrame))
+        shape = cast(GraphicFrame, self._shape_factory(graphicFrame))
+        if style == "clean":
+            tbl = shape.table
+            tbl.first_row = False
+            tbl.first_col = False
+            tbl.last_row = False
+            tbl.last_col = False
+            tbl.horz_banding = False
+            tbl.vert_banding = False
+        return shape
 
     def clone_layout_placeholders(self, slide_layout: SlideLayout) -> None:
         """Add placeholder shapes based on those in `slide_layout`.
