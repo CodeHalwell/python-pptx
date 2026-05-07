@@ -14,6 +14,80 @@ installs the ``pptx`` import name) is also present in the environment.
 .. _`scanny/python-pptx`: https://github.com/scanny/python-pptx
 
 
+Unreleased
+++++++++++
+
+Follows up the v2.5 review with the P0 bug fix and the P1 ergonomic
+additions identified in the user feedback document.
+
+Bug fixes
+~~~~~~~~~
+
+- ``area`` and ``doughnut`` chart writers no longer emit a bare
+  ``<a:endParaRPr/>``.  The bare form is schema-valid but Microsoft
+  PowerPoint's open-time validator is stricter than the spec and
+  prompted users to "Repair" any deck containing one of these chart
+  types, deleting the chart contents on accept.  All writers now
+  emit ``<a:endParaRPr lang="en-US"/>`` and a regression test asserts
+  the property holds for every chart writer.
+
+New APIs
+~~~~~~~~
+
+- ``Chart.recolour(palette, by="auto")`` (US alias ``recolor``) —
+  recommended single entry point for chart recolouring.  ``by="auto"``
+  dispatches to per-point colouring on pie / doughnut / pie-of-pie
+  variants and per-series colouring otherwise.  Closes the
+  "apply_palette doesn't work on doughnuts" footgun.
+
+- ``Chart.line_color`` (write-only) — pins axis line and gridline
+  colours in one assignment, the line-side counterpart to
+  ``text_color``.  Skips axes that don't exist on pie / doughnut, and
+  never materialises gridlines that aren't already there.
+
+- ``Chart.apply_dark_theme(text=..., line=...)`` — one-call wrapper
+  over ``text_color`` + ``line_color``.
+
+- ``slide.shapes.add_picture(..., anchor=..., margin=..., container=...)``
+  (and same kwargs on ``add_shape`` / ``add_textbox``) — anchor-aware
+  positioning for branding elements.  ``anchor="bottom-right"`` plus
+  a ``margin`` collapses the add → measure → reposition idiom to one
+  call, with ``container=`` controlling whether the anchor is
+  relative to the slide or to a parent shape.
+
+- ``slide.shapes.add_table(..., style="clean")`` — disables every
+  inherited table-style flag at construction so custom borders /
+  fills render consistently across PowerPoint and LibreOffice.
+
+- ``power_pptx.add_kpi_card`` / ``power_pptx.add_progress_bar`` —
+  shape-level building blocks layered beneath the slide-level
+  recipes.  Return small dataclasses (``KpiCard``, ``ProgressBar``)
+  exposing the constituent shapes so callers can compose them into
+  mixed layouts.
+
+- Top-level imports — ``add_plotly_figure``, ``add_matplotlib_figure``,
+  ``add_svg_figure``, ``add_html_figure``, ``FigureBackendUnavailable``,
+  ``add_kpi_card``, ``add_progress_bar``, ``KpiCard``, ``ProgressBar``
+  now importable from ``power_pptx`` directly (previously buried under
+  ``power_pptx.design.figures`` / ``.components``).
+
+Behaviour changes
+~~~~~~~~~~~~~~~~~
+
+- ``slide.shapes.add_chart(BAR_*, ...)`` now defaults the category
+  axis to ``reverse_order=True`` so ``["A", "B", "C"]`` renders with
+  ``A`` at the top — matching natural reading order.  Column charts
+  retain their default left-to-right ordering, and ``BAR_OF_PIE``
+  (a pie variant) is excluded.  Override post-creation with
+  ``chart.category_axis.reverse_order = False`` for the legacy
+  ordering.
+
+- ``Chart.apply_palette`` emits a ``UserWarning`` when called on a
+  pie / doughnut chart and routes through ``color_by_category``,
+  which is almost always what the caller meant.  Use
+  ``Chart.recolour`` for explicit, warning-free dispatch.
+
+
 2.5.0 (2026-05-01)
 ++++++++++++++++++
 
