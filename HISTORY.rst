@@ -14,6 +14,133 @@ installs the ``pptx`` import name) is also present in the environment.
 .. _`scanny/python-pptx`: https://github.com/scanny/python-pptx
 
 
+2.6.0 (2026-05-07)
+++++++++++++++++++
+
+Follows up the v2.5 review with the P0 bug fix, the P1 ergonomic
+additions identified in the user feedback document, and the
+previously-deferred P2/P3 items (lint group context manager,
+formats helpers, data-label collision strategy, the remaining
+shape-level building blocks, a constrained shape.animate() façade,
+and a deck-level PowerPoint-strict test scan).
+
+Bug fixes
+~~~~~~~~~
+
+- ``area`` and ``doughnut`` chart writers no longer emit a bare
+  ``<a:endParaRPr/>``.  The bare form is schema-valid but Microsoft
+  PowerPoint's open-time validator is stricter than the spec and
+  prompted users to "Repair" any deck containing one of these chart
+  types, deleting the chart contents on accept.  All writers now
+  emit ``<a:endParaRPr lang="en-US"/>`` and a regression test asserts
+  the property holds for every chart writer.
+
+New APIs
+~~~~~~~~
+
+- ``Chart.recolour(palette, by="auto")`` (US alias ``recolor``) —
+  recommended single entry point for chart recolouring.  ``by="auto"``
+  dispatches to per-point colouring on pie / doughnut / pie-of-pie
+  variants and per-series colouring otherwise.  Closes the
+  "apply_palette doesn't work on doughnuts" footgun.
+
+- ``Chart.line_color`` (write-only) — pins axis line and gridline
+  colours in one assignment, the line-side counterpart to
+  ``text_color``.  Skips axes that don't exist on pie / doughnut, and
+  never materialises gridlines that aren't already there.
+
+- ``Chart.apply_dark_theme(text=..., line=...)`` — one-call wrapper
+  over ``text_color`` + ``line_color``.
+
+- ``slide.shapes.add_picture(..., anchor=..., margin=..., container=...)``
+  (and same kwargs on ``add_shape`` / ``add_textbox``) — anchor-aware
+  positioning for branding elements.  ``anchor="bottom-right"`` plus
+  a ``margin`` collapses the add → measure → reposition idiom to one
+  call, with ``container=`` controlling whether the anchor is
+  relative to the slide or to a parent shape.
+
+- ``slide.shapes.add_table(..., style="clean")`` — disables every
+  inherited table-style flag at construction so custom borders /
+  fills render consistently across PowerPoint and LibreOffice.
+
+- ``power_pptx.add_kpi_card`` / ``power_pptx.add_progress_bar`` —
+  shape-level building blocks layered beneath the slide-level
+  recipes.  Return small dataclasses (``KpiCard``, ``ProgressBar``)
+  exposing the constituent shapes so callers can compose them into
+  mixed layouts.
+
+- Top-level imports — ``add_plotly_figure``, ``add_matplotlib_figure``,
+  ``add_svg_figure``, ``add_html_figure``, ``FigureBackendUnavailable``,
+  ``add_kpi_card``, ``add_progress_bar``, ``add_gauge``,
+  ``add_status_pill``, ``add_stat_strip``, ``add_article_card``, plus
+  the matching ``KpiCard`` / ``ProgressBar`` / ``Gauge`` / ``StatusPill``
+  / ``StatStrip`` / ``ArticleCard`` dataclasses are importable from
+  ``power_pptx`` directly (previously buried under
+  ``power_pptx.design.figures`` / ``.components``).
+
+- ``slide.shapes.lint_group_scope(name=None)`` — context manager
+  that auto-tags every shape added inside the ``with`` block with
+  the same ``lint_group``. Auto-generates a ``"design-group-N"``
+  name when omitted. Lifts the existing ``shape.lint_group``
+  mechanic out of "discoverable only via the docstring" into a
+  first-class API. The ``ShapeCollision`` lint message now also
+  appends a one-line tip recommending it when both shapes are
+  untagged.
+
+- ``power_pptx.formats`` — number-format string helpers that hide
+  Excel's format-string syntax behind named functions: ``currency``,
+  ``percent``, ``decimal``, ``thousands``, ``scientific``, ``date``.
+  Use them with ``data_labels.number_format`` and
+  ``cell.text_frame.text`` callsites.
+
+- ``DataLabels.collision_strategy = "auto" | "shrink" | "compact"`` —
+  three opinionated strategies for handling overlapping data labels
+  on bar / column charts. ``"auto"`` shrinks font and drops
+  ``gapWidth`` to 60 only on multi-series + ≥5-category plots;
+  ``"compact"`` always applies both; ``"shrink"`` only shrinks the
+  font. For real layout-aware collision avoidance, use
+  ``add_plotly_figure`` — Plotly handles it natively.
+
+- ``add_gauge``, ``add_status_pill``, ``add_stat_strip``,
+  ``add_article_card`` — additional shape-level building blocks
+  alongside ``add_kpi_card`` / ``add_progress_bar``. Each returns a
+  small dataclass exposing the constituent shapes for further
+  per-deck tweaks and tags the stack with ``lint_group``.
+
+- ``BaseShape.animate(entry=, exit=, emphasis=, trigger=,
+  delay_ms=, duration_ms=, direction=)`` — constrained-subset
+  façade over the existing ``power_pptx.animation`` API. Pass
+  exactly one of ``entry`` / ``exit`` / ``emphasis`` and the
+  matching preset name. For animation types not covered, drop
+  down to ``Entrance`` / ``Exit`` / ``Emphasis`` directly.
+
+Test infrastructure
+~~~~~~~~~~~~~~~~~~~
+
+- ``tests/test_powerpoint_strict_validation.py`` — deck-level scan
+  that constructs a deck with every implemented chart type, saves
+  to bytes, and walks every XML part looking for stricter-than-spec
+  patterns PowerPoint rejects but the OOXML schema accepts. Catches
+  the ``<a:endParaRPr/>`` regression today; the scaffold is
+  reusable for additional strict-validator rules we discover.
+
+Behaviour changes
+~~~~~~~~~~~~~~~~~
+
+- ``slide.shapes.add_chart(BAR_*, ...)`` now defaults the category
+  axis to ``reverse_order=True`` so ``["A", "B", "C"]`` renders with
+  ``A`` at the top — matching natural reading order.  Column charts
+  retain their default left-to-right ordering, and ``BAR_OF_PIE``
+  (a pie variant) is excluded.  Override post-creation with
+  ``chart.category_axis.reverse_order = False`` for the legacy
+  ordering.
+
+- ``Chart.apply_palette`` emits a ``UserWarning`` when called on a
+  pie / doughnut chart and routes through ``color_by_category``,
+  which is almost always what the caller meant.  Use
+  ``Chart.recolour`` for explicit, warning-free dispatch.
+
+
 2.5.0 (2026-05-01)
 ++++++++++++++++++
 

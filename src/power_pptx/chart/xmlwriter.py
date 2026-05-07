@@ -352,7 +352,7 @@ class _AreaChartXmlWriter(_BaseChartXmlWriter):
             "      <a:pPr>\n"
             '        <a:defRPr sz="1800"/>\n'
             "      </a:pPr>\n"
-            "      <a:endParaRPr/>\n"
+            '      <a:endParaRPr lang="en-US"/>\n'
             "    </a:p>\n"
             "  </c:txPr>\n"
             "</c:chartSpace>\n"
@@ -689,7 +689,7 @@ class _DoughnutChartXmlWriter(_BaseChartXmlWriter):
             "      <a:pPr>\n"
             '        <a:defRPr sz="1800"/>\n'
             "      </a:pPr>\n"
-            "      <a:endParaRPr/>\n"
+            '      <a:endParaRPr lang="en-US"/>\n'
             "    </a:p>\n"
             "  </c:txPr>\n"
             "</c:chartSpace>\n"

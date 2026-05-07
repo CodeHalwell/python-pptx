@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 
 from power_pptx.chart.axis import CategoryAxis, DateAxis, ValueAxis
@@ -10,9 +11,23 @@ from power_pptx.chart.plot import PlotFactory, PlotTypeInspector
 from power_pptx.chart.series import SeriesCollection
 from power_pptx.chart.xmlwriter import SeriesXmlRewriterFactory
 from power_pptx.dml.chtfmt import ChartFormat
+from power_pptx.enum.chart import XL_CHART_TYPE
 from power_pptx.shared import ElementProxy, PartElementProxy
 from power_pptx.text.text import Font, TextFrame
 from power_pptx.util import lazyproperty
+
+_SINGLE_SERIES_CHART_TYPES = frozenset(
+    {
+        XL_CHART_TYPE.PIE,
+        XL_CHART_TYPE.PIE_EXPLODED,
+        XL_CHART_TYPE.PIE_OF_PIE,
+        XL_CHART_TYPE.BAR_OF_PIE,
+        XL_CHART_TYPE.THREE_D_PIE,
+        XL_CHART_TYPE.THREE_D_PIE_EXPLODED,
+        XL_CHART_TYPE.DOUGHNUT,
+        XL_CHART_TYPE.DOUGHNUT_EXPLODED,
+    }
+)
 
 
 class Chart(PartElementProxy):
@@ -125,7 +140,24 @@ class Chart(PartElementProxy):
         ``spPr`` solid-fill foreground color directly, so it overrides the
         theme-derived colors that ``chart_style`` resolves to but leaves the
         ``chart_style`` value itself untouched.
+
+        Pie and doughnut charts have a single series, so per-series colors
+        recolour every slice the same. Calling this on a pie/doughnut emits a
+        ``UserWarning`` and routes through :meth:`color_by_category`, which is
+        almost always what was meant. Use :meth:`recolour` for explicit control.
         """
+        if self._is_single_series_chart():
+            warnings.warn(
+                "apply_palette() is series-level; pie and doughnut charts have "
+                "a single series, so per-slice recolouring needs "
+                "color_by_category(). Routing through it for you. Call "
+                "chart.recolour(palette) to silence this, or "
+                "chart.color_by_category(palette) to be explicit.",
+                UserWarning,
+                stacklevel=2,
+            )
+            self.color_by_category(palette)
+            return
         from power_pptx.chart.palettes import resolve_palette
 
         colors = resolve_palette(palette)
@@ -133,6 +165,58 @@ class Chart(PartElementProxy):
             fill = series.format.fill
             fill.solid()
             fill.fore_color.rgb = colors[idx % len(colors)]
+
+    def _is_single_series_chart(self):
+        """True for chart types where one series renders as N slices/bars.
+
+        Pie / doughnut variants conceptually have a single series whose
+        points are the user-visible coloured regions. ``apply_palette`` —
+        being series-level — therefore can't recolour them per-slice, and
+        callers almost always want per-point colouring instead.
+        """
+        try:
+            return self.chart_type in _SINGLE_SERIES_CHART_TYPES
+        except (NotImplementedError, KeyError, AttributeError):
+            return False
+
+    def recolour(self, palette, *, by="auto"):
+        """Recolour the chart from `palette`, auto-dispatching by chart type.
+
+        This is the recommended single entry point for chart recolouring;
+        it picks between :meth:`apply_palette` (series-level) and
+        :meth:`color_by_category` (point-level) so callers don't have to
+        remember which is right for their chart type.
+
+        ``by``:
+
+        * ``"auto"`` (default) — point-level for pie / doughnut, otherwise
+          series-level. Matches user intent in nearly every case.
+        * ``"series"`` — force series-level (same as
+          :meth:`apply_palette`).
+        * ``"category"`` — force point-level (same as
+          :meth:`color_by_category`).
+
+        `palette` accepts the same forms as :meth:`apply_palette`.
+        """
+        if by not in ("auto", "series", "category"):
+            raise ValueError(
+                f"by must be 'auto', 'series', or 'category'; got {by!r}"
+            )
+        if by == "category" or (by == "auto" and self._is_single_series_chart()):
+            self.color_by_category(palette)
+        else:
+            # Skip the soft-warning route in apply_palette for the explicit
+            # series path — caller asked for it, no second-guessing.
+            from power_pptx.chart.palettes import resolve_palette
+
+            colors = resolve_palette(palette)
+            for idx, series in enumerate(self.series):
+                fill = series.format.fill
+                fill.solid()
+                fill.fore_color.rgb = colors[idx % len(colors)]
+
+    # US-spelling alias kept stable.
+    recolor = recolour
 
     def color_by_category(self, palette):
         """Recolor every *data point* (category) instead of every series.
@@ -233,6 +317,76 @@ class Chart(PartElementProxy):
         for plot in self.plots:
             if plot.has_data_labels:
                 plot.data_labels.font.color.rgb = rgb
+
+    @property
+    def line_color(self):
+        """Write-only facade — read is unsupported.
+
+        On a dark deck the default axis lines and gridlines render as
+        dim grey on a dark background and look broken. Pinning each
+        axis line + gridline takes 4–6 separate writes; assigning
+        ``chart.line_color = "#3a3e5f"`` walks them all and skips the
+        ones that don't apply to this chart type (e.g. pie / doughnut
+        have no axes).
+
+        The set covered:
+
+        * ``category_axis.format.line``
+        * ``value_axis.format.line``
+        * ``category_axis.major_gridlines.format.line`` (if present)
+        * ``value_axis.major_gridlines.format.line`` (if present)
+
+        Materialisation is deliberately conservative: gridlines aren't
+        created if absent (no surprise change of chart appearance), and
+        on chart types without axes the property is a no-op rather than
+        raising.
+        """
+        raise AttributeError(
+            "chart.line_color is write-only; read individual format.line "
+            "objects (chart.category_axis.format.line.color, …) instead."
+        )
+
+    @line_color.setter
+    def line_color(self, value):
+        from power_pptx._color import coerce_color
+
+        try:
+            rgb = coerce_color(value)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                "line_color must be RGBColor, 6-digit hex string with or "
+                "without '#', or (r, g, b) tuple; got "
+                f"{type(value).__name__}: {exc}"
+            ) from exc
+
+        for axis_attr in ("category_axis", "value_axis"):
+            try:
+                axis = getattr(self, axis_attr)
+            except ValueError:
+                # Pie / doughnut etc. — no axis of this kind. Skip silently.
+                continue
+            axis.format.line.color.rgb = rgb
+            if axis.has_major_gridlines:
+                axis.major_gridlines.format.line.color.rgb = rgb
+
+    def apply_dark_theme(self, *, text="#FFFFFF", line="#3A3E5F"):
+        """One-call dark-theme styling for the chart.
+
+        Equivalent to::
+
+            chart.text_color = text
+            chart.line_color = line
+
+        Pins every text-bearing element to ``text`` and every axis line
+        + gridline to ``line``. Both arguments accept any colour-like
+        value (``RGBColor``, hex string, ``(r, g, b)`` tuple).
+
+        This is a deliberately small, opinionated convenience; for full
+        control reach for ``text_color`` and ``line_color`` directly, or
+        style each location explicitly.
+        """
+        self.text_color = text
+        self.line_color = line
 
     @property
     def chart_type(self):

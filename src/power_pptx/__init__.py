@@ -7,6 +7,27 @@ from typing import TYPE_CHECKING
 
 import power_pptx.exc as exceptions
 from power_pptx.api import Presentation
+from power_pptx.design.components import (
+    ArticleCard,
+    Gauge,
+    KpiCard,
+    ProgressBar,
+    StatStrip,
+    StatusPill,
+    add_article_card,
+    add_gauge,
+    add_kpi_card,
+    add_progress_bar,
+    add_stat_strip,
+    add_status_pill,
+)
+from power_pptx.design.figures import (
+    FigureBackendUnavailable,
+    add_html_figure,
+    add_matplotlib_figure,
+    add_plotly_figure,
+    add_svg_figure,
+)
 from power_pptx.opc.constants import CONTENT_TYPE as CT
 from power_pptx.opc.package import PartFactory
 from power_pptx.parts.chart import ChartPart
@@ -32,12 +53,34 @@ from power_pptx.parts.slide import (
 if TYPE_CHECKING:
     from power_pptx.opc.package import Part
 
-__version__ = "2.5.0"
+__version__ = "2.6.0"
 
 sys.modules["power_pptx.exceptions"] = exceptions
 del sys
 
-__all__ = ["Presentation"]
+__all__ = [
+    "Presentation",
+    # Figure adapters — embed Plotly / Matplotlib / SVG / HTML output as
+    # slide pictures. Third-party deps are imported lazily on first call.
+    "add_plotly_figure",
+    "add_matplotlib_figure",
+    "add_svg_figure",
+    "add_html_figure",
+    "FigureBackendUnavailable",
+    # Shape-level building blocks built on the design tokens.
+    "add_kpi_card",
+    "add_progress_bar",
+    "add_gauge",
+    "add_status_pill",
+    "add_stat_strip",
+    "add_article_card",
+    "KpiCard",
+    "ProgressBar",
+    "Gauge",
+    "StatusPill",
+    "StatStrip",
+    "ArticleCard",
+]
 
 content_type_to_part_class_map: dict[str, type[Part]] = {
     CT.PML_PRESENTATION_MAIN: PresentationPart,

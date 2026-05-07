@@ -50,6 +50,241 @@ if TYPE_CHECKING:
     from power_pptx.types import ProvidesPart
     from power_pptx.util import Length
 
+# Horizontal-bar chart types — those where category[0] sits at the
+# bottom of the axis by default. We flip ``reverse_order`` on these
+# at creation time so the first category renders at the top, matching
+# the natural reading order. ``BAR_OF_PIE`` is excluded — it's a pie
+# variant, not a horizontal-bar chart.
+_HORIZONTAL_BAR_CHART_NAMES = frozenset(
+    {
+        "BAR_CLUSTERED",
+        "BAR_STACKED",
+        "BAR_STACKED_100",
+        "THREE_D_BAR_CLUSTERED",
+        "THREE_D_BAR_STACKED",
+        "THREE_D_BAR_STACKED_100",
+        "CONE_BAR_CLUSTERED",
+        "CONE_BAR_STACKED",
+        "CONE_BAR_STACKED_100",
+        "CYLINDER_BAR_CLUSTERED",
+        "CYLINDER_BAR_STACKED",
+        "CYLINDER_BAR_STACKED_100",
+        "PYRAMID_BAR_CLUSTERED",
+        "PYRAMID_BAR_STACKED",
+        "PYRAMID_BAR_STACKED_100",
+    }
+)
+
+
+# Anchor strings accepted by ``add_picture`` / ``add_shape`` /
+# ``add_textbox``. The first token is vertical, the second horizontal;
+# ``"center"`` matches both axes (``center-center`` and bare
+# ``"center"`` are equivalent). The variant spellings keep both UK and
+# US conventions usable.
+_VERTICAL_ANCHORS = {"top", "middle", "center", "centre", "bottom"}
+_HORIZONTAL_ANCHORS = {"left", "center", "centre", "right"}
+
+
+def _resolve_anchor(anchor: str) -> tuple[str, str]:
+    """Return ``(vertical, horizontal)`` from a hyphenated anchor string.
+
+    Accepts ``"top-left"``, ``"top-center"``, ``"top-centre"``,
+    ``"middle-left"``, ``"middle-center"``, ``"middle-right"``,
+    ``"center"`` (== ``"middle-center"``), ``"bottom-left"``,
+    ``"bottom-center"``, ``"bottom-right"``, etc. ``"center-left"``
+    is also accepted as a synonym for ``"middle-left"`` since it's
+    a common typo.
+    """
+    raw = anchor.strip().lower()
+    if raw in {"center", "centre"}:
+        return ("middle", "center")
+    if "-" not in raw:
+        raise ValueError(
+            f"anchor must be 'center' or 'vertical-horizontal' "
+            f"(e.g. 'top-right'); got {anchor!r}"
+        )
+    parts = [p.strip() for p in raw.split("-", 1)]
+    v, h = parts[0], parts[1]
+    # Accept "center-left" etc. as synonyms for "middle-left".
+    if v == "center" or v == "centre":
+        v = "middle"
+    if v not in _VERTICAL_ANCHORS or h not in _HORIZONTAL_ANCHORS:
+        raise ValueError(
+            f"anchor must be one of top|middle|bottom dash "
+            f"left|center|right; got {anchor!r}"
+        )
+    # Normalise "centre" → "center" on the horizontal half.
+    if h == "centre":
+        h = "center"
+    return (v, h)
+
+
+def _compute_anchor_left_top(
+    anchor: str,
+    container_w: int,
+    container_h: int,
+    shape_w: int,
+    shape_h: int,
+    margin: int = 0,
+) -> tuple[int, int]:
+    """Compute ``(left, top)`` EMU values for a shape under `anchor`.
+
+    The shape is positioned inside a container of size
+    (`container_w`, `container_h`), with `margin` EMU between the
+    shape and the matching container edges (margin is ignored on the
+    centre axes — centred shapes don't need an outer margin).
+    """
+    v, h = _resolve_anchor(anchor)
+
+    if h == "left":
+        left = margin
+    elif h == "right":
+        left = container_w - margin - shape_w
+    else:  # center
+        left = (container_w - shape_w) // 2
+
+    if v == "top":
+        top = margin
+    elif v == "bottom":
+        top = container_h - margin - shape_h
+    else:  # middle
+        top = (container_h - shape_h) // 2
+
+    return (left, top)
+
+
+def _container_box(shapetree, container) -> tuple[int, int, int, int]:
+    """Return the slide-relative ``(left, top, width, height)`` of a container.
+
+    Shapes added through ``slide.shapes.add_*`` always live in the
+    slide's ``<p:spTree>`` and therefore use slide-relative
+    coordinates; nesting a shape inside a parent shape on the slide
+    is purely *visual*, not structural. So when ``container`` is a
+    parent shape, we need both its position *and* its size to compute
+    correct anchor coordinates — otherwise "centre inside this card"
+    silently means "centre inside a card-sized box at the slide
+    origin", which is wrong for any container not at ``(0, 0)``.
+
+    `container` may be:
+
+    * ``None`` — use the slide; origin ``(0, 0)``, extents from
+      the presentation.
+    * A slide-like object exposing ``part.package.presentation_part``
+      — same as ``None``, but resolves through the supplied object.
+    * Any object with ``.width`` and ``.height`` attributes; if it
+      also exposes ``.left`` / ``.top`` (i.e. a real shape) those
+      are honoured, otherwise the origin defaults to ``(0, 0)``
+      (useful for synthetic / virtual containers).
+
+    Raises ``ValueError`` if no usable extents can be derived.
+    """
+    if container is None:
+        prs = shapetree.part.package.presentation_part.presentation
+        return (0, 0, int(prs.slide_width), int(prs.slide_height))
+    # Shape-like: width / height attributes (with optional left / top).
+    if hasattr(container, "width") and hasattr(container, "height"):
+        w, h = container.width, container.height
+        if w is not None and h is not None:
+            left = getattr(container, "left", 0) or 0
+            top = getattr(container, "top", 0) or 0
+            return (int(left), int(top), int(w), int(h))
+    # Slide-like: try the same path as the default branch.
+    if hasattr(container, "part"):
+        try:
+            prs = container.part.package.presentation_part.presentation
+            return (0, 0, int(prs.slide_width), int(prs.slide_height))
+        except AttributeError:
+            pass
+    raise ValueError(
+        "container must be None, a slide, or a shape with .width/.height"
+    )
+
+
+def _container_extents(shapetree, container) -> tuple[int, int]:
+    """Back-compat wrapper — return ``(width, height)`` only.
+
+    Prefer :func:`_container_box` in new code; it also returns the
+    container's slide-relative origin, which the anchor helpers need
+    for non-origin containers.
+    """
+    _, _, w, h = _container_box(shapetree, container)
+    return (w, h)
+
+
+class _LintGroupScope:
+    """Context manager returned by :meth:`_BaseShapes.lint_group_scope`.
+
+    On enter it snapshots the current shape count of the tree; on
+    exit it tags every shape added in between with
+    ``shape.lint_group = name``. A diff-based approach keeps the
+    implementation independent of which ``add_*`` method the caller
+    uses — the proxy doesn't have to wrap each one individually, and
+    custom helpers that ultimately call into the tree just work.
+    """
+
+    def __init__(self, shapetree, name):
+        self._shapetree = shapetree
+        self._name = name
+        self._snapshot = 0
+
+    def __enter__(self):
+        self._snapshot = len(list(self._shapetree._iter_member_elms()))
+        return self._shapetree
+
+    def __exit__(self, exc_type, exc, tb):
+        # On exception, still tag — the shapes were added; bailing
+        # would leave them as untagged "real" overlaps in the lint
+        # report, which is the worse default.
+        from power_pptx.shapes.base import BaseShape
+
+        elms = list(self._shapetree._iter_member_elms())
+        added = elms[self._snapshot :]
+        if not added:
+            return False  # nothing to tag, propagate any exception
+
+        name = self._name
+        if name is None:
+            existing_groups = set()
+            for elm in elms:
+                shape = self._shapetree._shape_factory(elm)
+                tag = getattr(shape, "lint_group", None)
+                if tag:
+                    existing_groups.add(tag)
+            n = 1
+            while f"design-group-{n}" in existing_groups:
+                n += 1
+            name = f"design-group-{n}"
+
+        for elm in added:
+            shape: BaseShape = self._shapetree._shape_factory(elm)
+            try:
+                shape.lint_group = name
+            except (AttributeError, NotImplementedError):
+                # Some shape kinds don't carry a cNvPr (rare); skip.
+                pass
+        return False  # never suppress exceptions
+
+
+def _apply_horizontal_bar_default(graphic_frame, chart_type) -> None:
+    """Reverse the category axis on horizontal-bar chart types.
+
+    OOXML's default places ``category[0]`` at the bottom of the axis,
+    which makes a chart fed ``["A", "B", "C"]`` render with ``A`` at
+    the bottom — counterintuitive for natural top-to-bottom reading.
+    This flips it for the bar types where users almost always want
+    top-to-bottom; column charts keep their default left-to-right
+    ordering. Caller can override post-creation if the legacy default
+    is wanted.
+    """
+    if getattr(chart_type, "name", None) not in _HORIZONTAL_BAR_CHART_NAMES:
+        return
+    try:
+        graphic_frame.chart.category_axis.reverse_order = True
+    except (AttributeError, ValueError):
+        # Defensive: never break chart creation on a styling tweak.
+        pass
+
+
 # +-- _BaseShapes
 # |   |
 # |   +-- _BaseGroupShapes
@@ -108,6 +343,32 @@ class _BaseShapes(ParentedElementProxy):
         """
         shape_elms = list(self._iter_member_elms())
         return len(shape_elms)
+
+    def lint_group_scope(self, name: str | None = None):
+        """Context manager that auto-tags shapes added inside it.
+
+        Every shape appended to this shape tree between ``__enter__``
+        and ``__exit__`` is tagged with ``shape.lint_group = name`` on
+        exit, so the linter treats them as one intentional overlap
+        group. Use it for hand-built composite UI elements (progress
+        bars, gauges, badges, custom KPI tiles) where the constituent
+        shapes deliberately overlap and the auto-emitted
+        ``ShapeCollision`` warnings would be noise::
+
+            with slide.shapes.lint_group_scope(name="progress_bar") as g:
+                track = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, ...)
+                fill  = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, ...)
+            # both shapes now carry lint_group="progress_bar".
+
+        ``g`` (the yielded value) is this :class:`_BaseShapes`
+        instance, so calls inside the ``with`` block can also use
+        ``g.add_shape(...)`` for clarity.
+
+        When ``name`` is omitted a unique-on-this-tree name is
+        auto-generated (``"design-group-N"`` with smallest available
+        N), matching :meth:`Slide.lint_group_overlaps`.
+        """
+        return _LintGroupScope(self, name)
 
     def clone_placeholder(self, placeholder: LayoutPlaceholder) -> None:
         """Add a new placeholder shape based on `placeholder`."""
@@ -245,11 +506,19 @@ class _BaseGroupShapes(_BaseShapes):
         Note that a |GraphicFrame| shape object is returned, not the |Chart| object contained in
         that graphic frame shape. The chart object may be accessed using the :attr:`chart`
         property of the returned |GraphicFrame| object.
+
+        For horizontal bar charts (``BAR_*`` enum members), the category
+        axis is reversed by default so the first category renders at the
+        top — matching the natural reading order. Column charts retain
+        their default left-to-right ordering. Override by setting
+        ``chart.category_axis.reverse_order = False`` after creation.
         """
         rId = self.part.add_chart_part(chart_type, chart_data)
         graphicFrame = self._add_chart_graphicFrame(rId, x, y, cx, cy)
         self._recalculate_extents()
-        return cast("Chart", self._shape_factory(graphicFrame))
+        shape = self._shape_factory(graphicFrame)
+        _apply_horizontal_bar_default(shape, chart_type)
+        return cast("Chart", shape)
 
     def add_connector(
         self,
@@ -347,24 +616,61 @@ class _BaseGroupShapes(_BaseShapes):
     def add_picture(
         self,
         image_file: str | IO[bytes],
-        left: Length,
-        top: Length,
+        left: Length = Emu(0),
+        top: Length = Emu(0),
         width: Length | None = None,
         height: Length | None = None,
+        *,
+        anchor: str | None = None,
+        margin: Length = Emu(0),
+        container=None,
     ) -> Picture:
         """Add picture shape displaying image in `image_file`.
 
         `image_file` can be either a path to a file (a string) or a file-like object. The picture
-        is positioned with its top-left corner at (`top`, `left`). If `width` and `height` are
+        is positioned with its top-left corner at (`left`, `top`). If `width` and `height` are
         both |None|, the native size of the image is used. If only one of `width` or `height` is
         used, the unspecified dimension is calculated to preserve the aspect ratio of the image.
         If both are specified, the picture is stretched to fit, without regard to its native
         aspect ratio.
+
+        When `anchor` is given, ``left`` and ``top`` are recomputed
+        from the anchor + the picture's rendered dimensions. The
+        common case "logo at bottom-right with a 0.25" margin"
+        becomes a single call::
+
+            slide.shapes.add_picture(
+                logo_path,
+                anchor="bottom-right",
+                margin=Inches(0.25),
+                height=Inches(0.32),
+            )
+
+        `anchor` is one of ``"top-left"``, ``"top-center"``,
+        ``"top-right"``, ``"middle-left"``, ``"middle-center"`` (or
+        bare ``"center"``), ``"middle-right"``, ``"bottom-left"``,
+        ``"bottom-center"``, ``"bottom-right"``. Either spelling of
+        "center"/"centre" is accepted.
+
+        `container` is the box the anchor is relative to. ``None``
+        (the default) anchors against the slide; pass a parent shape
+        (or any object with ``.width`` / ``.height``) to anchor inside
+        a card / group / placeholder. `margin` is the gap between the
+        picture and the matching container edges; ignored on the
+        centred axes.
         """
         image_part, rId = self.part.get_or_add_image_part(image_file)
         pic = self._add_pic_from_image_part(image_part, rId, left, top, width, height)
         self._recalculate_extents()
-        return cast(Picture, self._shape_factory(pic))
+        picture = cast(Picture, self._shape_factory(pic))
+        if anchor is not None:
+            cl, ct, cw, ch = _container_box(self, container)
+            new_left, new_top = _compute_anchor_left_top(
+                anchor, cw, ch, int(picture.width), int(picture.height), int(margin)
+            )
+            picture.left = Emu(cl + new_left)
+            picture.top = Emu(ct + new_top)
+        return picture
 
     def add_svg_picture(
         self,
@@ -428,27 +734,70 @@ class _BaseGroupShapes(_BaseShapes):
         return cast(Picture, self._shape_factory(pic))
 
     def add_shape(
-        self, autoshape_type_id: MSO_SHAPE, left: Length, top: Length, width: Length, height: Length
+        self,
+        autoshape_type_id: MSO_SHAPE,
+        left: Length,
+        top: Length,
+        width: Length,
+        height: Length,
+        *,
+        anchor: str | None = None,
+        margin: Length = Emu(0),
+        container=None,
     ) -> Shape:
         """Return new |Shape| object appended to this shape tree.
 
         `autoshape_type_id` is a member of :ref:`MsoAutoShapeType` e.g. `MSO_SHAPE.RECTANGLE`
         specifying the type of shape to be added. The remaining arguments specify the new shape's
         position and size.
+
+        See :meth:`add_picture` for the semantics of `anchor`,
+        `margin`, and `container`. With `anchor` set, the supplied
+        `left` / `top` are overwritten after creation by the
+        anchor-derived position.
         """
         autoshape_type = AutoShapeType(autoshape_type_id)
         sp = self._add_sp(autoshape_type, left, top, width, height)
         self._recalculate_extents()
-        return cast(Shape, self._shape_factory(sp))
+        shape = cast(Shape, self._shape_factory(sp))
+        if anchor is not None:
+            cl, ct, cw, ch = _container_box(self, container)
+            new_left, new_top = _compute_anchor_left_top(
+                anchor, cw, ch, int(shape.width), int(shape.height), int(margin)
+            )
+            shape.left = Emu(cl + new_left)
+            shape.top = Emu(ct + new_top)
+        return shape
 
-    def add_textbox(self, left: Length, top: Length, width: Length, height: Length) -> Shape:
+    def add_textbox(
+        self,
+        left: Length,
+        top: Length,
+        width: Length,
+        height: Length,
+        *,
+        anchor: str | None = None,
+        margin: Length = Emu(0),
+        container=None,
+    ) -> Shape:
         """Return newly added text box shape appended to this shape tree.
 
         The text box is of the specified size, located at the specified position on the slide.
+
+        See :meth:`add_picture` for `anchor` / `margin` / `container`
+        semantics.
         """
         sp = self._add_textbox_sp(left, top, width, height)
         self._recalculate_extents()
-        return cast(Shape, self._shape_factory(sp))
+        textbox = cast(Shape, self._shape_factory(sp))
+        if anchor is not None:
+            cl, ct, cw, ch = _container_box(self, container)
+            new_left, new_top = _compute_anchor_left_top(
+                anchor, cw, ch, int(textbox.width), int(textbox.height), int(margin)
+            )
+            textbox.left = Emu(cl + new_left)
+            textbox.top = Emu(ct + new_top)
+        return textbox
 
     def build_freeform(
         self, start_x: float = 0, start_y: float = 0, scale: tuple[float, float] | float = 1.0
@@ -642,7 +991,15 @@ class SlideShapes(_BaseGroupShapes):
         return cast(GraphicFrame, self._shape_factory(movie_pic))
 
     def add_table(
-        self, rows: int, cols: int, left: Length, top: Length, width: Length, height: Length
+        self,
+        rows: int,
+        cols: int,
+        left: Length,
+        top: Length,
+        width: Length,
+        height: Length,
+        *,
+        style: str = "default",
     ) -> GraphicFrame:
         """Add a |GraphicFrame| object containing a table.
 
@@ -650,9 +1007,35 @@ class SlideShapes(_BaseGroupShapes):
         size. `width` is evenly distributed between the columns of the new table. Likewise,
         `height` is evenly distributed between the rows. Note that the `.table` property on the
         returned |GraphicFrame| shape must be used to access the enclosed |Table| object.
+
+        ``style`` controls the inherited table-style flags applied at
+        construction time:
+
+        * ``"default"`` (back-compat) — leave PowerPoint's
+          inherited-style flags alone. Behaves as before this argument
+          existed.
+        * ``"clean"`` — disable every inherited style flag
+          (``first_row``, ``first_col``, ``last_row``, ``last_col``,
+          ``horz_banding``, ``vert_banding``). Use when applying custom
+          cell borders or fills, since the inherited style otherwise
+          overlays them and renders inconsistently across PowerPoint
+          and LibreOffice.
         """
+        if style not in ("default", "clean"):
+            raise ValueError(
+                f"style must be 'default' or 'clean'; got {style!r}"
+            )
         graphicFrame = self._add_graphicFrame_containing_table(rows, cols, left, top, width, height)
-        return cast(GraphicFrame, self._shape_factory(graphicFrame))
+        shape = cast(GraphicFrame, self._shape_factory(graphicFrame))
+        if style == "clean":
+            tbl = shape.table
+            tbl.first_row = False
+            tbl.first_col = False
+            tbl.last_row = False
+            tbl.last_col = False
+            tbl.horz_banding = False
+            tbl.vert_banding = False
+        return shape
 
     def clone_layout_placeholders(self, slide_layout: SlideLayout) -> None:
         """Add placeholder shapes based on those in `slide_layout`.

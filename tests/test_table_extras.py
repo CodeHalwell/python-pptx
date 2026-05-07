@@ -129,6 +129,46 @@ class DescribeCellExtents:
         assert int(cell.height) == int(Inches(1))
 
 
+class DescribeAddTableStyleClean:
+    def it_disables_every_inherited_style_flag(self):
+        # ``style="clean"`` is the right base for hand-styled tables —
+        # custom cell borders / fills then render consistently across
+        # PowerPoint and LibreOffice without the inherited style
+        # overlay.
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        gf = slide.shapes.add_table(
+            2, 2, Inches(1), Inches(1), Inches(4), Inches(2), style="clean"
+        )
+        tbl = gf.table
+        assert tbl.first_row is False
+        assert tbl.first_col is False
+        assert tbl.last_row is False
+        assert tbl.last_col is False
+        assert tbl.horz_banding is False
+        assert tbl.vert_banding is False
+
+    def it_leaves_default_style_alone_when_unspecified(self):
+        # Confirm style="default" (and the no-arg default) doesn't
+        # silently change the inherited-style flags users may rely on.
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        gf_default = slide.shapes.add_table(
+            2, 2, Inches(1), Inches(1), Inches(4), Inches(2)
+        )
+        # New python-pptx tables come with first_row=True by default;
+        # make sure we don't change that without an opt-in.
+        assert gf_default.table.first_row is True
+
+    def it_rejects_unknown_style_names(self):
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        with pytest.raises(ValueError, match="style must be"):
+            slide.shapes.add_table(
+                2, 2, Inches(1), Inches(1), Inches(4), Inches(2), style="bogus"
+            )
+
+
 class DescribeCellFitText:
     def it_now_measures_against_cell_bounds_not_table_bounds(self):
         # Before this fix, ``cell.text_frame.fit_text`` measured against the

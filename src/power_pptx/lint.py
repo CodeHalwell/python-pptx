@@ -154,6 +154,19 @@ class ShapeCollision(LintIssue):
         group_suffix = ""
         if groups != (None, None):
             group_suffix = f" [groups: {groups[0]!r} vs {groups[1]!r}]"
+        # When neither shape is tagged, append a one-line hint so
+        # readers don't have to know about ``shape.lint_group`` from
+        # the docstring alone. Skip the hint when the user already
+        # set tags (the warning still fires because the tags don't
+        # match — that signal carries different intent).
+        hint_suffix = ""
+        if groups == (None, None):
+            hint_suffix = (
+                " — tip: if this overlap is intentional, set "
+                'shape.lint_group = "<name>" on both shapes, or use '
+                "slide.shapes.lint_group_scope() to tag a block of "
+                "shapes at once."
+            )
         super().__init__(
             severity=severity,
             code=code,
@@ -162,6 +175,7 @@ class ShapeCollision(LintIssue):
                 f"({intersection_pct:.0%} of the smaller shape's area) "
                 f"[kind={kind}, score={score:.2f}]"
                 + group_suffix
+                + hint_suffix
             ),
             shapes=(shape_a, shape_b),
         )

@@ -315,6 +315,103 @@ class BaseShape(object):
         # than clearing so the override round-trips.
         _write_lint_group(cNvPr, value)
 
+    def animate(
+        self,
+        *,
+        entry: str | None = None,
+        exit: str | None = None,
+        emphasis: str | None = None,
+        trigger: str = "on_click",
+        delay_ms: int = 0,
+        duration_ms: int = 500,
+        direction: str | None = None,
+    ) -> None:
+        """Add a constrained-subset animation to this shape.
+
+        A small façade over the full :mod:`power_pptx.animation` API for
+        the five most common cases. Heavy animation use is rarely
+        appropriate in a professional deck, so the surface is
+        deliberately narrow:
+
+        Pass exactly one of ``entry``, ``exit``, or ``emphasis``.
+        Recognised presets:
+
+        * ``entry``: ``"fade"``, ``"appear"``, ``"fly_in"``,
+          ``"float_in"``, ``"wipe"``, ``"zoom"``, ``"wheel"``,
+          ``"random_bars"``.
+        * ``exit``: ``"fade"``, ``"disappear"``, ``"fly_out"``,
+          ``"float_out"``, ``"wipe"``, ``"zoom"``, ``"wheel"``,
+          ``"random_bars"``.
+        * ``emphasis``: ``"pulse"``, ``"spin"``, ``"teeter"``.
+
+        ``trigger`` is one of ``"on_click"``, ``"with_previous"``,
+        ``"after_previous"``. ``delay_ms`` and ``duration_ms`` are
+        OOXML milliseconds. ``direction`` is consumed by ``fly_in`` /
+        ``fly_out`` / ``wipe`` (``"left"``, ``"right"``, ``"top"``,
+        ``"bottom"``); ignored otherwise.
+
+        For animation types not covered here, drop down to
+        :class:`power_pptx.animation.Entrance` /
+        :class:`~power_pptx.animation.Exit` /
+        :class:`~power_pptx.animation.Emphasis` directly.
+        """
+        kinds_set = sum(1 for v in (entry, exit, emphasis) if v is not None)
+        if kinds_set != 1:
+            raise ValueError(
+                "Pass exactly one of entry=, exit=, emphasis=; "
+                f"got entry={entry!r}, exit={exit!r}, emphasis={emphasis!r}"
+            )
+
+        from power_pptx.animation import Emphasis, Entrance, Exit
+        from power_pptx.enum.animation import PP_ANIM_TRIGGER
+
+        try:
+            slide = self.part.slide  # type: ignore[attr-defined]
+        except AttributeError as exc:
+            raise ValueError(
+                "shape.animate() requires the shape to be on a slide"
+            ) from exc
+
+        trigger_map = {
+            "on_click": PP_ANIM_TRIGGER.ON_CLICK,
+            "with_previous": PP_ANIM_TRIGGER.WITH_PREVIOUS,
+            "after_previous": PP_ANIM_TRIGGER.AFTER_PREVIOUS,
+        }
+        if trigger not in trigger_map:
+            raise ValueError(
+                f"trigger must be one of {sorted(trigger_map)}; got {trigger!r}"
+            )
+        trig = trigger_map[trigger]
+
+        common_kwargs = {"trigger": trig, "delay": int(delay_ms)}
+
+        def _call(facade_method, preset, *, supports_direction=False):
+            kwargs = dict(common_kwargs)
+            if preset != "appear" and preset != "disappear":
+                kwargs["duration"] = int(duration_ms)
+            if supports_direction and direction is not None:
+                kwargs["direction"] = direction
+            facade_method(slide, self, **kwargs)
+
+        if entry is not None:
+            preset = entry
+            method = getattr(Entrance, preset, None)
+            if method is None:
+                raise ValueError(f"unknown entry preset: {preset!r}")
+            _call(method, preset, supports_direction=preset in ("fly_in", "wipe"))
+        elif exit is not None:
+            preset = exit
+            method = getattr(Exit, preset, None)
+            if method is None:
+                raise ValueError(f"unknown exit preset: {preset!r}")
+            _call(method, preset, supports_direction=preset in ("fly_out", "wipe"))
+        else:  # emphasis
+            preset = emphasis  # type: ignore[assignment]
+            method = getattr(Emphasis, preset, None)
+            if method is None:
+                raise ValueError(f"unknown emphasis preset: {preset!r}")
+            _call(method, preset)
+
     @property
     def lint_skip(self) -> frozenset[str]:
         """Lint check codes silenced on this shape.

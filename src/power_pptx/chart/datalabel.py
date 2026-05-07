@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from power_pptx.oxml.ns import qn
 from power_pptx.text.text import Font, TextFrame
-from power_pptx.util import lazyproperty
+from power_pptx.util import Pt, lazyproperty
 
 
 class DataLabels(object):
@@ -138,6 +139,114 @@ class DataLabels(object):
     @show_value.setter
     def show_value(self, value):
         self._element.get_or_add_showVal().val = bool(value)
+
+    @property
+    def collision_strategy(self):
+        """Write-only — read is unsupported.
+
+        Strategies for handling overlapping data labels on
+        bar / column charts. Native PowerPoint doesn't reposition
+        labels at all, so this is a small set of heuristics that
+        nudge the typography and bar geometry into a less-collidey
+        layout. For genuine collision avoidance (re-laying out
+        labels around their bars), reach for ``add_plotly_figure``
+        — Plotly's chart engine handles this natively.
+
+        Assignable values:
+
+        * ``"auto"`` — apply a sensible default for the chart shape:
+          shrink data-label font to 8 pt, and on bar / column plots
+          with five or more categories *and* multiple series,
+          reduce ``gapWidth`` to 60 (thicker bars, more room
+          between labels). No-op on plots that don't carry
+          ``gapWidth``.
+        * ``"shrink"`` — only shrink the font (8 pt). Doesn't
+          touch bar geometry.
+        * ``"compact"`` — drop font to 8 pt *and* set
+          ``gapWidth=60``, regardless of category count. Use when
+          you've eyeballed the chart and want explicit thickening.
+
+        Read-only access raises ``AttributeError`` because the
+        property doesn't have a single canonical value to return —
+        the underlying state is split across font size and the
+        plot's ``gapWidth`` attribute.
+        """
+        raise AttributeError(
+            "data_labels.collision_strategy is write-only; read "
+            "data_labels.font.size and the plot's gap_width directly."
+        )
+
+    @collision_strategy.setter
+    def collision_strategy(self, value):
+        if value not in ("auto", "shrink", "compact"):
+            raise ValueError(
+                "collision_strategy must be 'auto', 'shrink', or 'compact'; "
+                f"got {value!r}"
+            )
+
+        # Step 1 — typography. Always shrink labels.
+        self.font.size = Pt(8)
+
+        # Step 2 — bar geometry. Walk up to the plot element to read
+        # series / category counts and write gapWidth. Only meaningful
+        # on bar / column charts (which carry ``c:gapWidth``); other
+        # plot types silently skip this step.
+        plot_elm = self._element.getparent()
+        if plot_elm is None:
+            return
+        gap_tag = qn("c:gapWidth")
+        if plot_elm.find(gap_tag) is None and plot_elm.tag not in (
+            qn("c:barChart"),
+            qn("c:bar3DChart"),
+        ):
+            # Not a gap-width-bearing plot; typography update is enough.
+            return
+
+        if value == "shrink":
+            return
+
+        if value == "compact":
+            self._set_or_add_gap_width(plot_elm, 60)
+            return
+
+        # value == "auto" — apply only when the heuristic warrants
+        # (≥5 categories AND multi-series).
+        ser_count = len(plot_elm.findall(qn("c:ser")))
+        cat_count = self._first_series_category_count(plot_elm)
+        if ser_count >= 2 and cat_count >= 5:
+            self._set_or_add_gap_width(plot_elm, 60)
+
+    @staticmethod
+    def _set_or_add_gap_width(plot_elm, val):
+        """Set ``<c:gapWidth val="..."/>`` on *plot_elm* (replacing if present)."""
+        gap_tag = qn("c:gapWidth")
+        existing = plot_elm.find(gap_tag)
+        if existing is not None:
+            existing.set("val", str(int(val)))
+            return
+        # The schema places gapWidth after dLbls in the bar-chart
+        # sequence; when not present we let lxml handle ordering by
+        # appending — PowerPoint accepts either ordering for the
+        # gap-width-bearing elements in this neighbourhood.
+        from lxml import etree
+
+        gw = etree.SubElement(plot_elm, gap_tag)
+        gw.set("val", str(int(val)))
+
+    @staticmethod
+    def _first_series_category_count(plot_elm):
+        """Count category points on the first series, or 0 if unreadable."""
+        ser = plot_elm.find(qn("c:ser"))
+        if ser is None:
+            return 0
+        cat = ser.find(qn("c:cat"))
+        if cat is None:
+            return 0
+        # Categories live as ``c:strRef/c:strCache/c:pt`` or
+        # ``c:numRef/c:numCache/c:pt``; both lead to ``c:pt`` in the
+        # rendered cache.
+        pts = cat.findall(f".//{qn('c:pt')}")
+        return len(pts)
 
 
 class DataLabel(object):
