@@ -6,6 +6,40 @@ import functools
 from typing import Any, Callable, Generic, TypeVar, cast
 
 
+def _coerce_emu(value):
+    """Internal: coerce a coordinate value to integer EMU.
+
+    Accepts int / Length passes through unchanged, floats are rounded
+    half-to-even, and ``None`` is passed through (callers may use ``None``
+    for "don't set"). ``bool`` is rejected — booleans are an int subclass
+    in Python but a boolean coordinate is always a programming error.
+
+    OOXML's ``CT_Point2D`` (``<a:off>``) requires ``x``/``y`` to be
+    ``xs:long`` and ``CT_PositiveSize2D`` (``<a:ext>``) requires
+    ``cx``/``cy`` to be ``xs:nonNegativeInteger``. Float-valued strings
+    in those attributes are schema-invalid; PowerPoint's strict
+    open-time validator rejects them with the "Repair?" dialog even
+    though python-pptx, the OOXML XSDs, and LibreOffice all accept
+    them silently. Coercing at constructor entry catches the common
+    case of ``(Inches(N) - gutter) / 2`` producing a float.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise TypeError("bool is not a valid EMU coordinate")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(round(value))
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        raise TypeError(
+            f"Expected int, float, or Emu-derived length; got "
+            f"{type(value).__name__}: {value!r}"
+        )
+
+
 class Length(int):
     """Base class for length classes Inches, Emu, Cm, Mm, and Pt.
 

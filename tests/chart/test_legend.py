@@ -60,7 +60,7 @@ class DescribeLegend(object):
         params=[
             (
                 "c:legend{a:b=c}",
-                "c:legend{a:b=c}/c:txPr/(a:bodyPr,a:lstStyle,a:p/a:pPr/a:defRPr)",
+                "c:legend{a:b=c}/c:txPr/(a:bodyPr,a:lstStyle,a:p/(a:pPr/a:defRPr,a:endParaRPr{lang=en-US}))",
             )
         ]
     )

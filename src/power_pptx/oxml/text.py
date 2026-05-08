@@ -152,6 +152,11 @@ class CT_TextBody(BaseOxmlElement):
         """Return a `c:txPr` element tree.
 
         Suitable for use in a chart object like data labels or tick labels.
+        The trailing ``<a:endParaRPr lang="en-US"/>`` is required by
+        PowerPoint's strict open-time validator — bare ``<a:p>...</a:p>``
+        passes the OOXML schema and LibreOffice but triggers the
+        "PowerPoint found a problem with content. Repair?" dialog,
+        after which PowerPoint silently empties the chart.
         """
         xml = (
             "<c:txPr %s>\n"
@@ -161,6 +166,7 @@ class CT_TextBody(BaseOxmlElement):
             "    <a:pPr>\n"
             "      <a:defRPr/>\n"
             "    </a:pPr>\n"
+            '    <a:endParaRPr lang="en-US"/>\n'
             "  </a:p>\n"
             "</c:txPr>\n"
         ) % nsdecls("c", "a")

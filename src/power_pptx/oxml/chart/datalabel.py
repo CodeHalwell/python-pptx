@@ -93,6 +93,7 @@ class CT_DLbl(BaseOxmlElement):
             "      <a:pPr>\n"
             "        <a:defRPr/>\n"
             "      </a:pPr>\n"
+            '      <a:endParaRPr lang="en-US"/>\n'
             "    </a:p>\n"
             "  </c:txPr>\n"
             '  <c:showLegendKey val="0"/>\n'

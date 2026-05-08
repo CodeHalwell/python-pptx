@@ -14,6 +14,56 @@ installs the ``pptx`` import name) is also present in the environment.
 .. _`scanny/python-pptx`: https://github.com/scanny/python-pptx
 
 
+2.6.1 (2026-05-08)
+++++++++++++++++++
+
+Patch release closing two more entries in the Issue-0 family — the
+PowerPoint-strict-validation bug class first surfaced by the v2.6.0
+doughnut ``<a:endParaRPr/>`` fix.  Both bugs pass python-pptx's
+integrity check and round-trip through LibreOffice cleanly, but
+Microsoft PowerPoint's open-time validator rejects them with the
+"PowerPoint found a problem with content. Repair?" dialog and
+silently drops the offending content on accept.
+
+Bug fixes
+~~~~~~~~~
+
+- Chart text-property blocks (``<c:txPr>``) and rich-title text
+  (``<c:rich>``) constructed lazily by font / colour customisation no
+  longer emit ``<a:p>`` paragraphs without ``<a:endParaRPr>``.  The
+  missing terminator triggered the "Repair?" dialog whenever a chart
+  data label or legend font was customised after data labels were
+  enabled (the most common pattern: ``chart.text_color = ...`` after
+  ``has_data_labels = True``).  The same fix applies to the dLbl
+  template, the chart-title rich-text builder, and the autoshape
+  text-body templates.
+
+- Float-valued coordinates passed to shape constructors are now
+  coerced to integer EMU at the API boundary.  Users routinely write
+  arithmetic like ``card_w = (Inches(N) - gutter) / 2`` (Python's
+  ``/`` produces a float) and pass the result to ``add_chart``,
+  ``add_shape``, ``add_textbox``, ``add_picture``, ``add_table``,
+  ``add_connector``, ``add_movie``, ``add_ole_object``, or
+  ``add_svg_picture``.  Pre-fix, the float landed verbatim in the
+  saved XML's ``<a:off>`` / ``<a:ext>`` attributes — schema-invalid
+  per ``CT_Point2D`` (``xs:long``) and ``CT_PositiveSize2D``
+  (``xs:nonNegativeInteger``), and rejected by PowerPoint with
+  "Repair?".  ``shape.left`` / ``shape.top`` / ``shape.width`` /
+  ``shape.height`` setters apply the same coercion.
+
+Added
+~~~~~
+
+- PowerPoint-strict regression tests in
+  ``tests/test_powerpoint_strict_validation.py`` now scan saved decks
+  for the three known PowerPoint-rejection patterns (``<a:p>`` with
+  no terminator and no text run, ``<a:endParaRPr>`` missing
+  ``lang``, and float-valued ``<a:off>`` / ``<a:ext>`` coordinates).
+  Each historical Issue-0-family bug has a pinned regression
+  fixture; the rule list grows as new strict-validator patterns are
+  discovered in the field.
+
+
 2.6.0 (2026-05-07)
 ++++++++++++++++++
 
