@@ -104,6 +104,27 @@ class DescribeCoerceEmu(object):
         with pytest.raises(TypeError):
             _coerce_emu(object())
 
+    def it_rejects_numeric_strings_and_bytes(self):
+        # str/bytes are convertible via float() but passing a coordinate
+        # as a string is always a programming error.
+        with pytest.raises(TypeError):
+            _coerce_emu("914400")
+        with pytest.raises(TypeError):
+            _coerce_emu(b"914400")
+        with pytest.raises(TypeError):
+            _coerce_emu(bytearray(b"914400"))
+
+    def it_rejects_nan_and_inf_with_TypeError(self):
+        # NaN raises ValueError from int(round(...)); ±inf raises
+        # OverflowError. Both are normalised to TypeError so callers
+        # see a single, informative exception type.
+        with pytest.raises(TypeError):
+            _coerce_emu(float("nan"))
+        with pytest.raises(TypeError):
+            _coerce_emu(float("inf"))
+        with pytest.raises(TypeError):
+            _coerce_emu(float("-inf"))
+
     def it_handles_the_field_repro_arithmetic(self):
         # The exact failure mode from the field bug report:
         # ``card_w = (Inches(N) - gutter) / 2`` produces a float.

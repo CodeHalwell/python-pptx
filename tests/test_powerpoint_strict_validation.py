@@ -209,15 +209,7 @@ class DescribeIssue0FamilyRegressions:
         # The sequence that triggered the field bug — assigning
         # text_color after dLbls are enabled materialises the chart's
         # <c:txPr> via CT_TextBody.new_txPr.
-        try:
-            chart.text_color = RGBColor.from_hex("FFFFFF")
-        except AttributeError:
-            # Some power-pptx versions expose the property differently;
-            # fall back to font-level customisation, which exercises the
-            # same lazy-build path.
-            chart.plots[0].data_labels.font.color.rgb = RGBColor(
-                0xFF, 0xFF, 0xFF
-            )
+        chart.text_color = RGBColor.from_hex("FFFFFF")
         buf = io.BytesIO()
         prs.save(buf)
         assert_powerpoint_strict_compliance(buf.getvalue())
