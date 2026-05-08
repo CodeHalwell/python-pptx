@@ -191,6 +191,11 @@ These changes ship after v2.5 and are easy to miss:
 - **`add_kpi_card(slide, ...)` / `add_progress_bar(slide, ...)`** —
   shape-level building blocks beneath the slide-level recipes
   (see `references/design.md`).
+- **Float coordinates from arithmetic are coerced** at constructor
+  entry and at `shape.left/top/width/height` setters, so
+  `(Inches(N) - gutter) / 2` style expressions can be passed straight
+  through. Pre-2.6.1 these produced float-valued `<a:off>` / `<a:ext>`
+  attributes that PowerPoint rejected with the "Repair?" dialog.
 
 ## Common pitfalls
 

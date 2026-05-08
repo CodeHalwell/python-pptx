@@ -234,3 +234,17 @@ Cm(2.54)    # ≈ Inches(1)
 ```
 
 Use these everywhere — never write the EMU integers directly.
+
+Arithmetic on lengths is fine — power-pptx coerces float coordinates
+to integer EMU at the API boundary, so this works:
+
+```python
+card_w = (Inches(12.33) - Inches(0.25)) / 2   # produces a float
+slide.shapes.add_chart(chart_type, x, y, card_w, height, data)
+slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, top, card_w, h)
+shape.width = card_w   # setter coerces too
+```
+
+Both ``/`` (true division → float) and ``//`` (floor division → int)
+work; pick whichever reads more cleanly. The coercion is round-half-
+to-even, so it's unbiased over long expression chains.
