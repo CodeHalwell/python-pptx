@@ -736,17 +736,17 @@ class DescribeAxisTitle(object):
             (
                 "c:title{a:b=c}",
                 True,
-                "c:title{a:b=c}/c:tx/c:rich/(a:bodyPr,a:lstStyle,a:p/a:pPr/a:defRPr" ")",
+                "c:title{a:b=c}/c:tx/c:rich/(a:bodyPr,a:lstStyle,a:p/(a:pPr/a:defRPr,a:endParaRPr{lang=en-US}))",
             ),
             (
                 "c:title{a:b=c}/c:tx",
                 True,
-                "c:title{a:b=c}/c:tx/c:rich/(a:bodyPr,a:lstStyle,a:p/a:pPr/a:defRPr" ")",
+                "c:title{a:b=c}/c:tx/c:rich/(a:bodyPr,a:lstStyle,a:p/(a:pPr/a:defRPr,a:endParaRPr{lang=en-US}))",
             ),
             (
                 "c:title{a:b=c}/c:tx/c:strRef",
                 True,
-                "c:title{a:b=c}/c:tx/c:rich/(a:bodyPr,a:lstStyle,a:p/a:pPr/a:defRPr" ")",
+                "c:title{a:b=c}/c:tx/c:rich/(a:bodyPr,a:lstStyle,a:p/(a:pPr/a:defRPr,a:endParaRPr{lang=en-US}))",
             ),
             ("c:title/c:tx/c:rich", True, "c:title/c:tx/c:rich"),
             ("c:title", False, "c:title"),
@@ -987,7 +987,7 @@ class DescribeTickLabels(object):
         params=[
             (
                 "c:valAx{a:b=c}",
-                "c:valAx{a:b=c}/c:txPr/(a:bodyPr,a:lstStyle,a:p/a:pPr/a:defRPr)",
+                "c:valAx{a:b=c}/c:txPr/(a:bodyPr,a:lstStyle,a:p/(a:pPr/a:defRPr,a:endParaRPr{lang=en-US}))",
             ),
             (
                 "c:valAx{a:b=c}/c:txPr/(a:bodyPr,a:p)",

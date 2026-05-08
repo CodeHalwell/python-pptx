@@ -295,6 +295,7 @@ class CT_Shape(BaseShapeElement):
             "    <a:lstStyle/>\n"
             "    <a:p>\n"
             '      <a:pPr algn="ctr"/>\n'
+            '      <a:endParaRPr lang="en-US"/>\n'
             "    </a:p>\n"
             "  </p:txBody>\n"
             "</p:sp>" % (nsdecls("a", "p"), "%d", "%s", "%d", "%d", "%d", "%d", "%s")
@@ -348,6 +349,7 @@ class CT_Shape(BaseShapeElement):
             "    <a:lstStyle/>\n"
             "    <a:p>\n"
             '      <a:pPr algn="ctr"/>\n'
+            '      <a:endParaRPr lang="en-US"/>\n'
             "    </a:p>\n"
             "  </p:txBody>\n"
             "</p:sp>" % (nsdecls("a", "p"), "%d", "%s", "%d", "%d", "%d", "%d")

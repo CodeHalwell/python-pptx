@@ -34,7 +34,7 @@ from power_pptx.shapes.placeholder import (
     TablePlaceholder,
 )
 from power_pptx.shared import ParentedElementProxy
-from power_pptx.util import Emu, lazyproperty
+from power_pptx.util import Emu, _coerce_emu, lazyproperty
 
 if TYPE_CHECKING:
     from power_pptx.chart.chart import Chart
@@ -513,6 +513,8 @@ class _BaseGroupShapes(_BaseShapes):
         their default left-to-right ordering. Override by setting
         ``chart.category_axis.reverse_order = False`` after creation.
         """
+        x, y = _coerce_emu(x), _coerce_emu(y)
+        cx, cy = _coerce_emu(cx), _coerce_emu(cy)
         rId = self.part.add_chart_part(chart_type, chart_data)
         graphicFrame = self._add_chart_graphicFrame(rId, x, y, cx, cy)
         self._recalculate_extents()
@@ -534,6 +536,8 @@ class _BaseGroupShapes(_BaseShapes):
         values are specified as EMU values. The returned connector is of type `connector_type` and
         has begin and end points as specified.
         """
+        begin_x, begin_y = _coerce_emu(begin_x), _coerce_emu(begin_y)
+        end_x, end_y = _coerce_emu(end_x), _coerce_emu(end_y)
         cxnSp = self._add_cxnSp(connector_type, begin_x, begin_y, end_x, end_y)
         self._recalculate_extents()
         return cast(Connector, self._shape_factory(cxnSp))
@@ -596,6 +600,10 @@ class _BaseGroupShapes(_BaseShapes):
         these values are not as set by PowerPoint. This behavior may only manifest in the Windows
         version of PowerPoint.
         """
+        left, top = _coerce_emu(left), _coerce_emu(top)
+        width, height = _coerce_emu(width), _coerce_emu(height)
+        icon_width = _coerce_emu(icon_width)
+        icon_height = _coerce_emu(icon_height)
         graphicFrame = _OleObjectElementCreator.graphicFrame(
             self,
             self._next_shape_id,
@@ -659,6 +667,8 @@ class _BaseGroupShapes(_BaseShapes):
         picture and the matching container edges; ignored on the
         centred axes.
         """
+        left, top = _coerce_emu(left), _coerce_emu(top)
+        width, height = _coerce_emu(width), _coerce_emu(height)
         image_part, rId = self.part.get_or_add_image_part(image_file)
         pic = self._add_pic_from_image_part(image_part, rId, left, top, width, height)
         self._recalculate_extents()
@@ -699,6 +709,8 @@ class _BaseGroupShapes(_BaseShapes):
         :meth:`add_picture` — both extents default to the rasterised
         PNG's native size when omitted.
         """
+        left, top = _coerce_emu(left), _coerce_emu(top)
+        width, height = _coerce_emu(width), _coerce_emu(height)
         from io import BytesIO
 
         from power_pptx._svg import (
@@ -756,6 +768,8 @@ class _BaseGroupShapes(_BaseShapes):
         `left` / `top` are overwritten after creation by the
         anchor-derived position.
         """
+        left, top = _coerce_emu(left), _coerce_emu(top)
+        width, height = _coerce_emu(width), _coerce_emu(height)
         autoshape_type = AutoShapeType(autoshape_type_id)
         sp = self._add_sp(autoshape_type, left, top, width, height)
         self._recalculate_extents()
@@ -787,6 +801,8 @@ class _BaseGroupShapes(_BaseShapes):
         See :meth:`add_picture` for `anchor` / `margin` / `container`
         semantics.
         """
+        left, top = _coerce_emu(left), _coerce_emu(top)
+        width, height = _coerce_emu(width), _coerce_emu(height)
         sp = self._add_textbox_sp(left, top, width, height)
         self._recalculate_extents()
         textbox = cast(Shape, self._shape_factory(sp))
@@ -975,6 +991,8 @@ class SlideShapes(_BaseGroupShapes):
         (`width`, `height`), and containing `movie_file`. Before the video is started,
         `poster_frame_image` is displayed as a placeholder for the video.
         """
+        left, top = _coerce_emu(left), _coerce_emu(top)
+        width, height = _coerce_emu(width), _coerce_emu(height)
         movie_pic = _MoviePicElementCreator.new_movie_pic(
             self,
             self._next_shape_id,
@@ -1025,6 +1043,8 @@ class SlideShapes(_BaseGroupShapes):
             raise ValueError(
                 f"style must be 'default' or 'clean'; got {style!r}"
             )
+        left, top = _coerce_emu(left), _coerce_emu(top)
+        width, height = _coerce_emu(width), _coerce_emu(height)
         graphicFrame = self._add_graphicFrame_containing_table(rows, cols, left, top, width, height)
         shape = cast(GraphicFrame, self._shape_factory(graphicFrame))
         if style == "clean":

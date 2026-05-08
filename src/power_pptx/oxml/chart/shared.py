@@ -206,6 +206,7 @@ class CT_Tx(BaseOxmlElement):
             "    <a:pPr>"
             "      <a:defRPr/>"
             "    </a:pPr>"
+            '    <a:endParaRPr lang="en-US"/>'
             "  </a:p>"
             "</c:rich>" % nsdecls("c", "a")
         )

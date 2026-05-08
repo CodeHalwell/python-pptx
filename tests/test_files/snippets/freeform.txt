@@ -38,6 +38,7 @@
       <a:lstStyle/>
       <a:p>
         <a:pPr algn="ctr"/>
+        <a:endParaRPr lang="en-US"/>
       </a:p>
     </p:txBody>
   </p:sp>

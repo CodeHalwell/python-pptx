@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
-from power_pptx.util import Centipoints, Cm, Emu, Inches, Length, Mm, Pt
+from power_pptx.util import Centipoints, Cm, Emu, Inches, Length, Mm, Pt, _coerce_emu
 
 
 class DescribeLength(object):
@@ -50,3 +52,82 @@ class DescribeLength(object):
     def units_fixture(self, request):
         emu, units_prop_name, expected_length_in_units = request.param
         return emu, units_prop_name, expected_length_in_units
+
+
+class DescribeCoerceEmu(object):
+    """Coordinate values are coerced to integer EMU at constructor entry.
+
+    Float-valued ``<a:off>`` / ``<a:ext>`` attributes violate the OOXML
+    schema's ``xs:long`` / ``xs:nonNegativeInteger`` rules and trigger
+    the PowerPoint "Repair?" dialog even though python-pptx, the XSDs,
+    and LibreOffice accept them silently.
+    """
+
+    def it_passes_int_through_unchanged(self):
+        assert _coerce_emu(914400) == 914400
+
+    def it_passes_None_through_unchanged(self):
+        assert _coerce_emu(None) is None
+
+    def it_passes_Length_subclasses_through_unchanged(self):
+        for length in (Inches(1), Emu(123), Pt(10), Cm(2), Mm(5)):
+            assert _coerce_emu(length) == int(length)
+
+    def it_rounds_floats_half_to_even(self):
+        # Python's int() truncates toward zero; round() is half-to-even.
+        # Truncation accumulates one-EMU drift over arithmetic chains.
+        assert _coerce_emu(914400.5) == 914400  # banker's rounding
+        assert _coerce_emu(914401.5) == 914402  # banker's rounding
+        assert _coerce_emu(914400.4) == 914400
+        assert _coerce_emu(914400.6) == 914401
+
+    def it_handles_negative_floats(self):
+        # <a:off> may legitimately have negative coords (off-slide).
+        assert _coerce_emu(-0.5) == 0  # half-to-even
+        assert _coerce_emu(-1.5) == -2  # half-to-even
+        assert _coerce_emu(-100.4) == -100
+
+    def it_rejects_bool_explicitly(self):
+        # bool is a Python int subclass but is always a programming
+        # error as a coordinate.
+        with pytest.raises(TypeError):
+            _coerce_emu(True)
+        with pytest.raises(TypeError):
+            _coerce_emu(False)
+
+    def it_accepts_Decimal_via_float_fallback(self):
+        assert _coerce_emu(Decimal("914400.5")) == 914400
+
+    def it_rejects_non_numeric(self):
+        with pytest.raises(TypeError):
+            _coerce_emu("not-a-number")
+        with pytest.raises(TypeError):
+            _coerce_emu(object())
+
+    def it_rejects_numeric_strings_and_bytes(self):
+        # str/bytes are convertible via float() but passing a coordinate
+        # as a string is always a programming error.
+        with pytest.raises(TypeError):
+            _coerce_emu("914400")
+        with pytest.raises(TypeError):
+            _coerce_emu(b"914400")
+        with pytest.raises(TypeError):
+            _coerce_emu(bytearray(b"914400"))
+
+    def it_rejects_nan_and_inf_with_TypeError(self):
+        # NaN raises ValueError from int(round(...)); ±inf raises
+        # OverflowError. Both are normalised to TypeError so callers
+        # see a single, informative exception type.
+        with pytest.raises(TypeError):
+            _coerce_emu(float("nan"))
+        with pytest.raises(TypeError):
+            _coerce_emu(float("inf"))
+        with pytest.raises(TypeError):
+            _coerce_emu(float("-inf"))
+
+    def it_handles_the_field_repro_arithmetic(self):
+        # The exact failure mode from the field bug report:
+        # ``card_w = (Inches(N) - gutter) / 2`` produces a float.
+        card_w = (Inches(12.33) - Inches(0.25)) / 2
+        assert isinstance(card_w, float)
+        assert isinstance(_coerce_emu(card_w), int)

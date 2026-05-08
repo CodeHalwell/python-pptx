@@ -467,7 +467,7 @@ class DescribeChart(object):
         params=[
             (
                 "c:chartSpace{a:b=c}",
-                "c:chartSpace{a:b=c}/c:txPr/(a:bodyPr,a:lstStyle,a:p/a:pPr/a:defRPr" ")",
+                "c:chartSpace{a:b=c}/c:txPr/(a:bodyPr,a:lstStyle,a:p/(a:pPr/a:defRPr,a:endParaRPr{lang=en-US}))",
             ),
             ("c:chartSpace/c:txPr/a:p", "c:chartSpace/c:txPr/a:p/a:pPr/a:defRPr"),
             (
@@ -782,17 +782,17 @@ class DescribeChartTitle(object):
             (
                 "c:title{a:b=c}",
                 True,
-                "c:title{a:b=c}/c:tx/c:rich/(a:bodyPr,a:lstStyle,a:p/a:pPr/a:defRPr" ")",
+                "c:title{a:b=c}/c:tx/c:rich/(a:bodyPr,a:lstStyle,a:p/(a:pPr/a:defRPr,a:endParaRPr{lang=en-US}))",
             ),
             (
                 "c:title{a:b=c}/c:tx",
                 True,
-                "c:title{a:b=c}/c:tx/c:rich/(a:bodyPr,a:lstStyle,a:p/a:pPr/a:defRPr" ")",
+                "c:title{a:b=c}/c:tx/c:rich/(a:bodyPr,a:lstStyle,a:p/(a:pPr/a:defRPr,a:endParaRPr{lang=en-US}))",
             ),
             (
                 "c:title{a:b=c}/c:tx/c:strRef",
                 True,
-                "c:title{a:b=c}/c:tx/c:rich/(a:bodyPr,a:lstStyle,a:p/a:pPr/a:defRPr" ")",
+                "c:title{a:b=c}/c:tx/c:rich/(a:bodyPr,a:lstStyle,a:p/(a:pPr/a:defRPr,a:endParaRPr{lang=en-US}))",
             ),
             ("c:title/c:tx/c:rich", True, "c:title/c:tx/c:rich"),
             ("c:title", False, "c:title"),

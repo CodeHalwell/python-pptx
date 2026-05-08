@@ -14,7 +14,7 @@ from power_pptx.dml.effect import (
 )
 from power_pptx.dml.three_d import ThreeDFormat
 from power_pptx.shared import ElementProxy
-from power_pptx.util import lazyproperty
+from power_pptx.util import _coerce_emu, lazyproperty
 
 if TYPE_CHECKING:
     from power_pptx.design.style import ShapeStyle
@@ -108,7 +108,7 @@ class BaseShape(object):
 
     @height.setter
     def height(self, value: Length):
-        self._element.cy = value
+        self._element.cy = _coerce_emu(value)
 
     @property
     def is_placeholder(self) -> bool:
@@ -128,7 +128,7 @@ class BaseShape(object):
 
     @left.setter
     def left(self, value: Length):
-        self._element.x = value
+        self._element.x = _coerce_emu(value)
 
     @property
     def name(self) -> str:
@@ -521,7 +521,7 @@ class BaseShape(object):
 
     @top.setter
     def top(self, value: Length):
-        self._element.y = value
+        self._element.y = _coerce_emu(value)
 
     @property
     def width(self) -> Length:
@@ -533,7 +533,7 @@ class BaseShape(object):
 
     @width.setter
     def width(self, value: Length):
-        self._element.cx = value
+        self._element.cx = _coerce_emu(value)
 
 
 class _PlaceholderFormat(ElementProxy):
